@@ -118,25 +118,47 @@ print(f"PG Schema:  {PG_SCHEMA}")
 # COMMAND ----------
 
 from databricks.sdk.service.postgres import Project, ProjectSpec
+from databricks.sdk.errors import NotFound, PermissionDenied
 import time
 
 try:
     existing = w.postgres.get_project(name=f"projects/{PROJECT_ID}")
     print(f"Project already exists: {existing.name}")
     print(f"Display name: {existing.status.display_name}")
-except Exception:
+except PermissionDenied as exc:
+    raise RuntimeError(
+        f"NOT READY: {user_email} cannot inspect project {PROJECT_ID}. "
+        "Ask the workshop facilitator to grant project access."
+    ) from exc
+except NotFound:
     print(f"Creating project: {PROJECT_ID} ...")
-    operation = w.postgres.create_project(
-        project=Project(
-            spec=ProjectSpec(
-                display_name=f"Lakebase Workshop: {PROJECT_ID}",
-                pg_version=PG_VERSION,
-            )
-        ),
-        project_id=PROJECT_ID,
-    )
-    result = operation.wait()
-    print(f"✓ Project created: {result.name}")
+    try:
+        operation = w.postgres.create_project(
+            project=Project(
+                spec=ProjectSpec(
+                    display_name=f"Lakebase Workshop: {PROJECT_ID}",
+                    pg_version=PG_VERSION,
+                )
+            ),
+            project_id=PROJECT_ID,
+        )
+        result = operation.wait()
+        print(f"✓ Project created: {result.name}")
+    except PermissionDenied as exc:
+        raise RuntimeError(
+            f"NOT READY: {user_email} cannot create project {PROJECT_ID}. "
+            "Ask the workshop facilitator to create it or grant project-creation access."
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            f"NOT READY: project creation failed for {PROJECT_ID}: "
+            f"{type(exc).__name__}: {str(exc).splitlines()[0][:240]}"
+        ) from exc
+except Exception as exc:
+    raise RuntimeError(
+        f"NOT READY: project lookup failed for {PROJECT_ID}: "
+        f"{type(exc).__name__}: {str(exc).splitlines()[0][:240]}"
+    ) from exc
 
 # COMMAND ----------
 

@@ -322,6 +322,7 @@ LABS: tuple[Lab, ...] = (
         requires=("setup",),
         gates=(GATE_SEARCH,),
         sentinels=(
+            "✓ READY:",
             "✓ Retail corpus built: 24 products across 2 stores",
             "✓ Exact identifier route returned 10001234",
             "✓ Same query, two stores, two explainable winners",
@@ -331,6 +332,7 @@ LABS: tuple[Lab, ...] = (
             "✓ Expected answers passed: 8/8",
         ),
         forbidden=(
+            "✗ NOT READY:",
             "✗ Lakebase Search extensions are unavailable for this project.",
             REPAIR_WARNING,
         ),

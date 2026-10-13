@@ -49,11 +49,20 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## 0. Check readiness before touching lab data
+# MAGIC
+# MAGIC This checks the pre-created project, PostgreSQL, the production endpoint, OAuth, Search,
+# MAGIC and every table and index operation used by the lab. If it reports `NOT READY`, stop here.
+
+# COMMAND ----------
+
+conn = validate_lakebase_search_lab_readiness()
+
+# COMMAND ----------
+
 import math
 import re
-
-conn = get_connection("production")
-print("✓ Connected to production branch")
 
 
 def execute(sql, params=()):

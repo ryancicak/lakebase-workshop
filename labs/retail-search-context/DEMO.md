@@ -74,6 +74,11 @@ The exact identifier exercise uses SKU `10001234`.
 
 The notebook checks every expected result.
 
+Before those exercises, the first executable lab cell must report `READY`. It checks project access,
+PostgreSQL, the production endpoint, OAuth, Search preload, both extensions, the setup schema, and a
+rolled-back exact/vector/BM25 probe. If it reports `NOT READY`, stop there. Do not debug setup during
+the customer-driven session.
+
 ## 60-minute facilitation flow
 
 1. Start with the current split in 5 minutes: retrieve products, then add store data. Ask whether store rules should affect the candidate set earlier.

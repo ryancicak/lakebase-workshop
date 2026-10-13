@@ -34,6 +34,11 @@ Plan for about 60 minutes:
 
 The notebook does not enable Search. It stops if the extensions are unavailable.
 
+Its first executable lab cell prints one readiness report before any fixture data is created. It
+checks the pre-created project, PostgreSQL version, production endpoint, OAuth connection, Search
+preload, extension installability, setup schema, and the exact table and index permissions used by
+the lab. The functional probe rolls back its table, indexes, rows, and extension state.
+
 ## What you will see
 
 - SKU and UPC use exact SQL equality, not vector search.
