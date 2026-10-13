@@ -2,9 +2,11 @@
 # MAGIC %md
 # MAGIC # Lakebase Search — Vector, Keyword & Hybrid
 # MAGIC
+# MAGIC > **Modification notice:** Modified by Ryan Cicak on 2026-10-13 to use current, status-neutral Lakebase Search enablement wording.
+# MAGIC
 # MAGIC **Path:** Lakebase Search &nbsp;|&nbsp; **Prerequisite:** `00_Setup_Lakebase_Project`
 # MAGIC
-# MAGIC **Lakebase feature:** Lakebase Search *(Beta)* — hybrid vector + keyword search inside Postgres
+# MAGIC **Lakebase feature:** Lakebase Search, hybrid vector + keyword search inside Postgres
 # MAGIC
 # MAGIC In this notebook you will:
 # MAGIC 1. Enable and install the search extensions (`lakebase_vector`, `lakebase_text`)
@@ -23,16 +25,15 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## ⚠️ Before you run: Lakebase Search is Beta and enablement is irreversible
+# MAGIC ## ⚠️ Before you run: enablement restarts compute and is irreversible
 # MAGIC
-# MAGIC Lakebase Search is in **Beta**. Enabling it on a project:
+# MAGIC Enabling Lakebase Search on a project:
 # MAGIC
 # MAGIC - **Restarts all computes in the project**, dropping active connections
 # MAGIC - Makes the `lakebase_vector` and `lakebase_text` extensions available to install
 # MAGIC - **Cannot be turned off once enabled**
 # MAGIC
-# MAGIC It also requires **Beta access** for your project (a workspace admin enables it from the
-# MAGIC **Previews** page; contact your Databricks account team to request it). Requirements: **Postgres 16+**.
+# MAGIC Requirement: **Postgres 16+**.
 # MAGIC
 # MAGIC **Enable it once, in the UI:** Lakebase project → **Settings** → **Lakebase Search** → **Enable**.
 # MAGIC

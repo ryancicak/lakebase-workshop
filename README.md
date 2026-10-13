@@ -1,5 +1,7 @@
 # Lakebase Workshop
 
+> **Modification notice:** Modified by Ryan Cicak on 2026-10-13 to document a fictional, store-aware retail search lab.
+
 A hands-on workshop for exploring **Databricks Lakebase** -- a fully managed PostgreSQL database that runs inside your Databricks workspace.
 
 > **It's all one Lakebase now.** Databricks has unified its managed Postgres under a single **Lakebase** offering (the earlier "Provisioned" instances were upgraded to the unified platform by Jul 31, 2026). You'll still see **"Autoscaling"** in doc URLs and the SDK (`w.postgres.*`, the `oltp/projects` surface) — that's the API surface this workshop is built on.
@@ -57,7 +59,8 @@ Every lab is independent. Pick whichever sounds interesting, or follow one of th
 | **Data Operations** | Create, read, update, and delete data; work with JSON and arrays |
 | **Data API** | Call Lakebase over REST (PostgREST) with an OAuth bearer token and row-level security |
 | **Agentic Memory** | Store and query AI agent conversation history |
-| **Lakebase Search** *(Beta)* | Add vector + keyword (BM25) search and hybrid ranking to your data |
+| **Lakebase Search** | Add vector + keyword (BM25) search and hybrid ranking to your data |
+| **Store-Aware Retail Search** *(advanced)* | Route exact identifiers directly, then combine typed filters, hybrid ranking, and store assortment in SQL |
 | **App Deployment** *(capstone)* | Deploy a full-stack web app backed by Lakebase |
 
 ### Data & ML Engineers
@@ -86,7 +89,7 @@ All labs are in the `labs/` folder, organized by topic.
 
 ## Lab Console App
 
-Your facilitator may have deployed a shared **Lab Console** web app. This app mirrors all the labs in a visual interface -- you can use it alongside (or instead of) the notebooks.
+Your facilitator may have deployed a shared **Lab Console** web app. This app mirrors many of the core labs in a visual interface. Advanced labs, including Store-Aware Retail Search, remain notebook-only.
 
 Open it at: **Compute > Apps > lakebase-lab-console**
 
@@ -118,7 +121,7 @@ The setup notebook (Step 2 above) automatically grants the app access to your da
 - [Branches](https://docs.databricks.com/aws/en/oltp/projects/branches) · [Autoscaling](https://docs.databricks.com/aws/en/oltp/projects/autoscaling) · [Scale to zero](https://docs.databricks.com/aws/en/oltp/projects/scale-to-zero) · [High availability](https://docs.databricks.com/aws/en/oltp/projects/high-availability) · [Read replicas](https://docs.databricks.com/aws/en/oltp/projects/read-replicas)
 - [Serve lakehouse data with synced tables (Reverse ETL)](https://docs.databricks.com/aws/en/oltp/projects/sync-tables) · [Register Lakebase in Unity Catalog](https://docs.databricks.com/aws/en/oltp/projects/register-uc) · [Lakebase Change Data Feed (Lakehouse Sync)](https://docs.databricks.com/aws/en/oltp/projects/lakehouse-sync)
 - [Point-in-time restore](https://docs.databricks.com/aws/en/oltp/projects/point-in-time-restore) · [Monitor](https://docs.databricks.com/aws/en/oltp/projects/monitor)
-- [Data API (PostgREST)](https://docs.databricks.com/aws/en/oltp/projects/data-api) · [Lakebase Search](https://docs.databricks.com/aws/en/oltp/projects/lakebase-search) *(Beta)*
+- [Data API (PostgREST)](https://docs.databricks.com/aws/en/oltp/projects/data-api) · [Lakebase Search](https://docs.databricks.com/aws/en/oltp/projects/lakebase-search)
 - [Online Feature Store](https://docs.databricks.com/aws/en/machine-learning/feature-store/online-feature-store) · [Connect an application](https://docs.databricks.com/aws/en/oltp/projects/connect-application)
 
 **Reference:**

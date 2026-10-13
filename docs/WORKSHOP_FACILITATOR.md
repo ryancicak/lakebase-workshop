@@ -1,5 +1,7 @@
 # Workshop Facilitator Guide
 
+> **Modification notice:** Modified by Ryan Cicak on 2026-10-13 to document a fictional, store-aware retail search lab.
+
 ## Overview
 
 This guide helps facilitators run a Lakebase workshop. The workshop uses a **foundation + choose-your-track** model: participants complete a single setup notebook, then follow a track tailored to their role — or mix and match labs across tracks.
@@ -36,8 +38,9 @@ After the foundation, participants follow a track based on their role. Each trac
 | 1 | Data Operations | `labs/data-operations/` | CRUD, JSONB, arrays, triggers, transactions |
 | 2 | Data API | `labs/data-api/` | PostgREST REST access, `authenticator` role, OAuth bearer, RLS |
 | 3 | Agentic Memory | `labs/agentic-memory/` | Persistent AI agent memory with sessions |
-| 4 | Lakebase Search *(Beta)* | `labs/lakebase-search/` | Vector + BM25 + hybrid RRF search (enablement is irreversible) |
-| 5 | App Deployment *(capstone)* | `labs/app-deployment/` | Full-stack React + FastAPI Lab Console app |
+| 4 | Lakebase Search | `labs/lakebase-search/` | Vector + BM25 + hybrid RRF search (enablement is irreversible) |
+| 5 | Store-Aware Retail Search *(advanced)* | `labs/retail-search-context/` | Exact identifier routing plus typed filters, hybrid ranking, and store assortment |
+| 6 | App Deployment *(capstone)* | `labs/app-deployment/` | Full-stack React + FastAPI Lab Console app |
 
 **Key narrative:** *"Lakebase gives your applications a production-grade PostgreSQL backend inside the Lakehouse — no separate infrastructure, no bespoke sync pipelines."*
 
@@ -83,11 +86,15 @@ Every lab lives directly in `labs/`. No track folder structure — tracks are a 
 | Authentication, Security & Compliance | `labs/authentication/` | OAuth tokens, roles, encryption/CMK, Private Link, compliance |
 | Backup & Recovery | `labs/backup-recovery/` | Checkpoint branches, snapshots, PITR, restore, cross-region DR note |
 | Agentic Memory | `labs/agentic-memory/` | Persistent agent memory pattern |
-| Lakebase Search *(Beta)* | `labs/lakebase-search/` | Vector + BM25 + hybrid RRF search (enablement irreversible) |
+| Lakebase Search | `labs/lakebase-search/` | Vector + BM25 + hybrid RRF search (enablement irreversible) |
+| Store-Aware Retail Search *(advanced)* | `labs/retail-search-context/` | Exact identifier routing plus typed filters, hybrid ranking, and store assortment in SQL |
 | Online Feature Store | `labs/online-feature-store/` | Real-time ML feature serving with Lakebase |
 | App Deployment | `labs/app-deployment/` | Full-stack Lab Console app (capstone) |
 
 ## Timing Options
+
+The track tables are menus. The timing templates below use a subset of each track, not every lab
+listed in the track.
 
 ### Full Workshop — Multi-Track (2.5 hours)
 
@@ -121,7 +128,7 @@ Best for homogeneous audiences (e.g., all developers, all platform engineers). R
 
 ### Standard Workshop (90 min)
 
-Pick one track and run it end-to-end.
+Pick three labs from one track.
 
 | Time | Activity | Details |
 |------|----------|---------|
@@ -143,6 +150,12 @@ Highlight one lab from each track to show breadth.
 | 0:25 – 0:40 | **Development Experience** (Branching) | Platform Architects track highlight |
 | 0:40 – 0:55 | **Data Operations** (CRUD + JSONB) | Application Builders track highlight |
 | 0:55 – 1:00 | Wrap-up, point to full tracks for self-paced | All tracks |
+
+### Store-Aware Retail Search Deep Dive (60 min)
+
+This advanced lab is notebook-only and does not fit a 20-minute track slot. Enable Lakebase Search
+before participants arrive, then use the exact flow and expected answers in
+[`labs/retail-search-context/DEMO.md`](../labs/retail-search-context/DEMO.md).
 
 ## Step-by-Step Setup
 
@@ -209,12 +222,14 @@ Once the foundation is complete, participants can open the Lab Console from
 **Compute → Apps → lakebase-lab-console**. The app will show their project,
 tables, and data automatically.
 
-### 5. Choose lab paths (notebooks or app — unified experience)
+### 5. Choose lab paths
 
-Every lab is available **two ways**, and participants can switch between them freely:
+Many core labs are available **two ways**, and participants can switch between them freely:
 
 - **Notebook path:** Open a lab notebook and run cells step-by-step. Each notebook includes a clickable banner linking to the corresponding app page.
 - **App path:** Open the Lab Console and navigate to a lab page. Each page includes a banner linking back to the corresponding notebook.
+
+Advanced labs, including Store-Aware Retail Search, are notebook-only.
 
 The cross-links use URL hashes (e.g., `#data`, `#agent`, `#branches`) so participants can deep-link between the two experiences. This means:
 - A facilitator can say *"open the app and go to Data Ops"* or *"open the Data Operations notebook"* — both cover the same material.
@@ -443,8 +458,13 @@ Lakebase-Workshop/
 │   │   └── Advanced_Postgres.sql
 │   ├── data-api/                               # Data API (PostgREST)
 │   │   └── Data_API.py
-│   ├── lakebase-search/                        # Vector, keyword & hybrid search (Beta)
+│   ├── lakebase-search/                        # Vector, keyword & hybrid search
 │   │   └── Lakebase_Search.py
+│   ├── retail-search-context/                  # Store-aware retail search (advanced)
+│   │   ├── Retail_Search_Context.py
+│   │   ├── README.md
+│   │   ├── DEMO.md
+│   │   └── TASKS.md
 │   ├── reverse-etl/                            # Synced tables from Delta
 │   │   └── Reverse_ETL.py
 │   ├── unity-catalog-access/                   # Federated read-only UC catalog over Postgres

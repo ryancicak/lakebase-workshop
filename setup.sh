@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
 # Lakebase Workshop — Getting Started
+# Modification notice: Modified by Ryan Cicak on 2026-10-13 to list a fictional, store-aware retail search lab.
 #
 # Run this after cloning the repo. It handles everything:
 #   1. Installs requirements
@@ -772,7 +773,8 @@ echo -e "    ${CYAN} 8. labs/agentic-memory/${RESET}          Persistent AI agen
 echo -e "    ${CYAN} 9. labs/online-feature-store/${RESET}    Real-time ML feature serving"
 echo -e "    ${CYAN}10. labs/app-deployment/${RESET}          Full-stack Lab Console app (capstone)"
 echo -e "    ${CYAN}11. labs/data-api/${RESET}                 PostgREST REST access, OAuth bearer tokens, RLS"
-echo -e "    ${CYAN}12. labs/lakebase-search/${RESET}          Vector + keyword search with hybrid RRF ranking (Beta)"
+echo -e "    ${CYAN}12. labs/lakebase-search/${RESET}          Vector + keyword search with hybrid RRF ranking"
+echo -e "    ${CYAN}13. labs/retail-search-context/${RESET}    Exact, hybrid, and store-aware retail search (advanced)"
 echo ""
 echo -e "  ${DIM}Workspace:   $WORKSPACE_HOST${RESET}"
 echo -e "  ${DIM}Profile:     $PROFILE${RESET}"

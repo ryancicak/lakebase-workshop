@@ -14,6 +14,8 @@ Placeholders usable in `sql`, `creates`, and `params` values:
     {user}         participant email
 """
 
+# Modification notice: Modified by Ryan Cicak on 2026-10-13 to add a fictional, store-aware retail search lab.
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -310,6 +312,68 @@ LABS: tuple[Lab, ...] = (
         creates=("pg_table:search_documents",),
         notes="Requires Lakebase Search enabled on the project (UI, irreversible). "
         "Drops and rebuilds its own table, so it is naturally repeatable.",
+    ),
+    # ------------------------------------------------------------------ #
+    Lab(
+        id="retail_search_context",
+        path="labs/retail-search-context/Retail_Search_Context.py",
+        order=85,
+        timeout_s=900,
+        requires=("setup",),
+        gates=(GATE_SEARCH,),
+        sentinels=(
+            "✓ Retail corpus built: 24 products across 2 stores",
+            "✓ Exact identifier route returned 10001234",
+            "✓ Same query, two stores, two explainable winners",
+            "✓ Negative case returned no eligible products",
+            "✓ Baseline answers passed: 7/7",
+            "✓ Restocking 10001234 changed the winner; fixture restored",
+            "✓ Expected answers passed: 8/8",
+        ),
+        forbidden=(
+            "✗ Lakebase Search extensions are unavailable for this project.",
+            REPAIR_WARNING,
+        ),
+        checks=(
+            sql(
+                "Lakebase Search extensions installed",
+                "SELECT count(*) FROM pg_extension "
+                "WHERE extname IN ('lakebase_vector','lakebase_text')",
+                "== 2",
+            ),
+            sql("retail product fixture built", "SELECT count(*) FROM {schema}.retail_product_search", "== 24"),
+            sql("two-store fixture built", "SELECT count(*) FROM {schema}.retail_store_product", "== 48"),
+            sql(
+                "typed target rows available across both stores",
+                "SELECT count(*) FROM {schema}.retail_store_product s "
+                "JOIN {schema}.retail_product_search p USING (product_id) "
+                "WHERE p.product_type = 'impact_driver' AND p.voltage = 20 "
+                "AND p.kit_type = 'TOOL_ONLY' AND s.on_hand > 0 "
+                "AND s.assortment_status IN ('CORE', 'EXTENDED')",
+                "== 9",
+            ),
+            sql(
+                "two eligible CORE candidates remain per store",
+                "SELECT count(*) FROM ("
+                "SELECT s.store_id, count(*) AS candidate_count "
+                "FROM {schema}.retail_store_product s "
+                "JOIN {schema}.retail_product_search p USING (product_id) "
+                "WHERE s.store_id IN ('store_pine', 'store_river') "
+                "AND p.product_type = 'impact_driver' AND p.voltage = 20 "
+                "AND p.kit_type = 'TOOL_ONLY' AND p.brand <> 'EmberVale' "
+                "AND s.on_hand > 0 AND s.assortment_status = 'CORE' "
+                "GROUP BY s.store_id HAVING count(*) = 2) eligible_by_store",
+                "== 2",
+            ),
+        ),
+        creates=(
+            "pg_table:retail_store_product",
+            "pg_table:retail_product_search",
+        ),
+        notes="Advanced fictional retail fixture. Exact identifiers use equality. The "
+        "natural-language route combines typed filters, vector rank, BM25 rank, and the "
+        "CORE-only assortment rule in a single SQL query. Drops and rebuilds its two "
+        "tables on every run.",
     ),
     # ------------------------------------------------------------------ #
     Lab(

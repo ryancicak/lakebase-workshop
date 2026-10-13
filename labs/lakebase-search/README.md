@@ -1,6 +1,8 @@
-# Lakebase Search (Beta)
+# Lakebase Search
 
-Add **vector (semantic)**, **keyword (BM25)**, and **hybrid** search directly inside your Lakebase Postgres database — no separate search service.
+> **Modification notice:** Modified by Ryan Cicak on 2026-10-13 to use current, status-neutral Lakebase Search enablement wording.
+
+Run **vector (semantic)**, **keyword (BM25)**, and **hybrid** search directly in Lakebase Postgres.
 
 ## Labs
 
@@ -11,7 +13,7 @@ Add **vector (semantic)**, **keyword (BM25)**, and **hybrid** search directly in
 ## Prerequisites
 
 - Complete **`00_Setup_Lakebase_Project`** (foundation)
-- **Lakebase Search enabled** for your project (Beta) — a workspace admin enables Beta access from the **Previews** page; then enable it in the project **Settings → Lakebase Search**
+- **Lakebase Search enabled** for your project under **Settings → Lakebase Search**
 - **Postgres 16+**
 
 ## ⚠️ Enablement is irreversible

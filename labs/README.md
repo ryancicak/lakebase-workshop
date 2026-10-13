@@ -1,5 +1,7 @@
 # Lab Paths
 
+> **Modification notice:** Modified by Ryan Cicak on 2026-10-13 to document a fictional, store-aware retail search lab.
+
 After **`notebooks/00_Setup_Lakebase_Project`**, pick labs by **what you want to learn**. Every lab is independent.
 
 ## How folders work
@@ -26,8 +28,9 @@ Start here → [`labs/<folder>/README.md`](.) → open the file in **What to run
 | 1 | [Data Operations](data-operations/) | [`Data_Operations.py`](data-operations/Data_Operations.py) · optional [`Advanced_Postgres.sql`](data-operations/Advanced_Postgres.sql) | CRUD, JSONB, arrays, triggers, transactions |
 | 2 | [Data API](data-api/) | [`Data_API.py`](data-api/Data_API.py) | PostgREST, `authenticator` role, OAuth bearer, RLS |
 | 3 | [Agentic Memory](agentic-memory/) | [`Agent_Memory.py`](agentic-memory/Agent_Memory.py) | Session + long-term agent memory |
-| 4 | [Lakebase Search](lakebase-search/) *(Beta)* | [`Lakebase_Search.py`](lakebase-search/Lakebase_Search.py) | Vector + BM25 + hybrid RRF |
-| 5 | [App Deployment](app-deployment/) | [`Deploy_Lab_Console_App.py`](app-deployment/Deploy_Lab_Console_App.py) | Capstone: React + FastAPI Lab Console |
+| 4 | [Lakebase Search](lakebase-search/) | [`Lakebase_Search.py`](lakebase-search/Lakebase_Search.py) | Vector + BM25 + hybrid RRF |
+| 5 | [Store-Aware Retail Search](retail-search-context/) *(advanced)* | [`Retail_Search_Context.py`](retail-search-context/Retail_Search_Context.py) | Exact identifier routing plus typed filters, hybrid ranking, and store assortment in SQL |
+| 6 | [App Deployment](app-deployment/) | [`Deploy_Lab_Console_App.py`](app-deployment/Deploy_Lab_Console_App.py) | Capstone: React + FastAPI Lab Console |
 
 ### Data & ML Engineers
 
@@ -79,7 +82,8 @@ Numbered for the workshop validator and facilitators. Prefer the **track tables*
 | 10 | [Online Feature Store](online-feature-store/) | `online-feature-store/` | Real-time ML feature serving powered by Lakebase Autoscaling |
 | 11 | [App Deployment](app-deployment/) | `app-deployment/` | Full-stack React + FastAPI app using Lakebase (capstone) |
 | 12 | [Data API](data-api/) | `data-api/` | PostgREST REST access with an `authenticator` role, OAuth bearer tokens, and row-level security |
-| 13 | [Lakebase Search](lakebase-search/) *(Beta)* | `lakebase-search/` | Vector (ANN) + keyword (BM25) search and hybrid RRF ranking with `lakebase_vector` / `lakebase_text` |
+| 13 | [Lakebase Search](lakebase-search/) | `lakebase-search/` | Vector (ANN) + keyword (BM25) search and hybrid RRF ranking with `lakebase_vector` / `lakebase_text` |
+| 14 | [Store-Aware Retail Search](retail-search-context/) *(advanced)* | `retail-search-context/` | Exact identifier routing plus typed filters, hybrid ranking, and store-specific assortment in SQL |
 
 ## Path Dependencies
 
@@ -98,11 +102,11 @@ Foundation (00_Setup)
     │       └── 3. High_Availability_and_Replicas
     ├── Authentication, Security & Compliance
     ├── Backup & Recovery
-    ├── Agentic Memory ──(optional next)──► Lakebase Search
+    ├── Agentic Memory
     ├── Online Feature Store (requires DBR 16.4 LTS ML or serverless)
     ├── App Deployment (best after exploring other paths)
     ├── Data API (pairs with Data Operations)
-    └── Lakebase Search (Beta — enablement is irreversible; opt-in per project)
+    └── Lakebase Search (enablement is irreversible) ──► Store-Aware Retail Search
 ```
 
 ## Connecting & Querying Lakebase
@@ -153,9 +157,10 @@ For the full reference, see: [Connect to your database](https://docs.databricks.
 | **Quick overview (30 min)** | Development Experience |
 | **Data-focused (60 min)** | Data Operations → Observability |
 | **App builder (60 min)** | Data Operations → Data API → Agentic Memory → App Deployment |
-| **AI search (45 min)** | Agentic Memory → Lakebase Search *(Beta)* |
+| **AI search (45 min)** | Agentic Memory → Lakebase Search |
+| **Store-aware retail search (60 min)** | Store-Aware Retail Search (Search enabled; introductory concepts assumed) |
 | **ML serving (45 min)** | Reverse ETL → Online Feature Store |
 | **Lakehouse connectivity (45 min)** | Unity Catalog Access → Reverse ETL → Lakehouse Sync *(Public Preview)* |
 | **Bi-directional sync (45 min)** | Reverse ETL → Lakehouse Sync *(Public Preview)* |
 | **Platform deep-dive (90 min)** | Development Experience → Authentication → Backup & Recovery → Observability |
-| **Full workshop (2.5 hours)** | All paths |
+| **Full workshop (2.5 hours)** | Foundation + selected track labs + cross-track time |
