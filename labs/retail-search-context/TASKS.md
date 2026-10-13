@@ -23,10 +23,15 @@
 - Manifest self-check: passed with no problems.
 - Deterministic fixture check: confirmed opposite vector and BM25 leaders, plus a winner change when the weights are swapped.
 
-## Before using this live
+## Cross-cloud live validation on 2026-10-13
 
-- Run it once in a Search-enabled sandbox.
-- Run it a second time to prove database cleanup and expected answers are repeatable.
-- Inspect and record the `EXPLAIN` output. With 24 rows, a sequential scan can be the right plan.
+The unchanged notebook at tested commit `cde3b56` passed twice in isolated, Search-enabled Lakebase projects on both clouds.
 
-Run those checks in an isolated, Search-enabled development project.
+| Cloud | PostgreSQL | Runs | Result |
+|-------|------------|------|--------|
+| AWS | 17.11 | 2 | All assertions passed, including the reversible restock and final 8/8 check |
+| Azure | 17.11 | 2 | All assertions passed, including the reversible restock and final 8/8 check |
+
+Independent checks on both clouds confirmed 24 products, 48 store rows, exactly two eligible `CORE` candidates per store, and restored stock after the mutation exercise. Exact, vector, and BM25 plans were inspected. The actual 24-row queries correctly favored sequential scans at this size. Azure index-form plans also confirmed the intended exact-key, ANN, and BM25 access paths.
+
+The two lab tables, temporary workspace files, jobs, and dedicated validation projects were removed after testing. Run the same preflight in the exact session workspace before live use. This synthetic fixture is not a scale, latency, relevance, or production benchmark.
