@@ -81,6 +81,9 @@ class Lab:
     checks: tuple[Check, ...] = ()
     creates: tuple[str, ...] = ()
     notes: str = ""
+    # Standalone labs own their project lifecycle and are excluded from the
+    # default shared-project sweep. Run them explicitly with --only.
+    standalone: bool = False
     # Set to explain why a lab is knowingly incomplete. It is skipped rather than
     # failed, so an unfinished lab cannot masquerade as a passing one.
     deferred: str = ""
@@ -318,10 +321,12 @@ LABS: tuple[Lab, ...] = (
         id="retail_search_context",
         path="labs/retail-search-context/Retail_Search_Context.py",
         order=85,
-        timeout_s=900,
-        requires=("setup",),
-        gates=(GATE_SEARCH,),
+        timeout_s=2400,
         sentinels=(
+            "✓ Dedicated project:",
+            "✓ Production endpoint:",
+            "✓ Lakebase Search:",
+            "✓ Participant schema:",
             "✓ READY:",
             "✓ Retail corpus built: 24 products across 2 stores",
             "✓ Exact identifier route returned 10001234",
@@ -332,11 +337,15 @@ LABS: tuple[Lab, ...] = (
             "✓ Expected answers passed: 8/8",
         ),
         forbidden=(
-            "✗ NOT READY:",
-            "✗ Lakebase Search extensions are unavailable for this project.",
+            "NOT READY",
+            "✗ Lakebase Search extension installation failed after preparation.",
             REPAIR_WARNING,
         ),
         checks=(
+            sdk(
+                "dedicated retail project contract",
+                "retail_project_contract:",
+            ),
             sql(
                 "Lakebase Search extensions installed",
                 "SELECT count(*) FROM pg_extension "
@@ -372,10 +381,11 @@ LABS: tuple[Lab, ...] = (
             "pg_table:retail_store_product",
             "pg_table:retail_product_search",
         ),
-        notes="Advanced fictional retail fixture. Exact identifiers use equality. The "
-        "natural-language route combines typed filters, vector rank, BM25 rank, and the "
-        "CORE-only assortment rule in a single SQL query. Drops and rebuilds its two "
-        "tables on every run.",
+        notes="Standalone, self-provisioning lab. The first practical cell creates or "
+        "safely reuses the current user's dedicated 1/1 CU PostgreSQL 17 project, "
+        "enables Search, creates only the participant schema, and validates exact, "
+        "ANN, and BM25 operations. The exercises drop and rebuild only their two tables.",
+        standalone=True,
     ),
     # ------------------------------------------------------------------ #
     Lab(
@@ -608,6 +618,35 @@ LABS: tuple[Lab, ...] = (
 
 LABS_BY_ID = {lab.id: lab for lab in LABS}
 RUN_ORDER = tuple(sorted(LABS, key=lambda lab: lab.order))
+DEFAULT_RUN_ORDER = tuple(lab for lab in RUN_ORDER if not lab.standalone)
+
+
+def select_run_labs(only: str | None = None) -> tuple[Lab, ...]:
+    """Select one lifecycle-safe set of labs.
+
+    Without ``only``, return the shared-project run order. Standalone labs must
+    be named explicitly and cannot be mixed with shared-project labs in one run.
+    """
+    if only is None:
+        return DEFAULT_RUN_ORDER
+
+    wanted = {item.strip() for item in only.split(",") if item.strip()}
+    if not wanted:
+        raise ValueError("--only did not name any labs")
+
+    unknown = wanted - set(LABS_BY_ID)
+    if unknown:
+        raise ValueError("unknown lab id(s): " + ", ".join(sorted(unknown)))
+
+    selected = tuple(lab for lab in RUN_ORDER if lab.id in wanted)
+    standalone = [lab.id for lab in selected if lab.standalone]
+    shared = [lab.id for lab in selected if not lab.standalone]
+    if standalone and shared:
+        raise ValueError(
+            "standalone and shared-project labs cannot run together. "
+            "Run the standalone lab in its own --only invocation"
+        )
+    return selected
 
 
 def resolve(text: str, ctx: dict[str, str]) -> str:
@@ -615,21 +654,30 @@ def resolve(text: str, ctx: dict[str, str]) -> str:
     return text.format(**ctx)
 
 
-def validate_manifest() -> list[str]:
+def validate_manifest(labs: tuple[Lab, ...] = LABS) -> list[str]:
     """Self-check the manifest. Returns a list of problems (empty when healthy)."""
     problems: list[str] = []
+    labs_by_id = {lab.id: lab for lab in labs}
     seen_orders: dict[int, str] = {}
-    for lab in LABS:
+    for lab in labs:
         if lab.kind not in ("notebook", "sql"):
             problems.append(f"{lab.id}: unknown kind {lab.kind!r}")
         if lab.order in seen_orders:
             problems.append(f"{lab.id}: duplicate order {lab.order} (shared with {seen_orders[lab.order]})")
         seen_orders[lab.order] = lab.id
         for dep in lab.requires:
-            if dep not in LABS_BY_ID:
+            if dep not in labs_by_id:
                 problems.append(f"{lab.id}: requires unknown lab {dep!r}")
-            elif LABS_BY_ID[dep].order >= lab.order:
+            elif labs_by_id[dep].order >= lab.order:
                 problems.append(f"{lab.id}: requires {dep!r} which does not run earlier")
+            elif lab.standalone and not labs_by_id[dep].standalone:
+                problems.append(
+                    f"{lab.id}: standalone lab cannot require shared lab {dep!r}"
+                )
+            elif not lab.standalone and labs_by_id[dep].standalone:
+                problems.append(
+                    f"{lab.id}: shared lab cannot require standalone lab {dep!r}"
+                )
         for check in lab.checks:
             if check.kind not in ("sql", "sdk"):
                 problems.append(f"{lab.id}: check {check.label!r} has unknown kind {check.kind!r}")

@@ -4,7 +4,7 @@
 
 ## Overview
 
-This guide helps facilitators run a Lakebase workshop. The workshop uses a **foundation + choose-your-track** model: participants complete a single setup notebook, then follow a track tailored to their role — or mix and match labs across tracks.
+This guide helps facilitators run a Lakebase workshop. The standard workshop uses a **foundation + choose-your-track** model: participants complete a single setup notebook, then follow a track tailored to their role or mix and match labs across tracks. Store-Aware Retail Search is the one standalone path and prepares its own dedicated per-user project.
 
 > **Naming:** Databricks has unified its managed Postgres under a single **Lakebase** offering (former "Provisioned" instances upgraded by Jul 31, 2026). This workshop is built on the **Autoscaling** API surface (`w.postgres.*`, the `oltp/projects` docs), so you'll still see "Autoscaling" in SDK calls and doc links — that's expected.
 
@@ -13,13 +13,13 @@ This guide helps facilitators run a Lakebase workshop. The workshop uses a **fou
 Before the workshop:
 
 - [ ] Databricks workspace with Lakebase enabled
-- [ ] Each participant has workspace access with permissions to create Lakebase projects
+- [ ] Each participant has workspace access with permissions to create Lakebase projects and enable Lakebase Search
 - [ ] Python 3.11+ installed on each participant's machine
 - [ ] Homebrew (macOS) or apt (Linux) available if you will deploy the Lab Console — `setup.sh` uses it to install Node.js
 
 ## Workshop Structure
 
-### Foundation (required — all participants)
+### Foundation (required for every lab except Store-Aware Retail Search)
 
 | Notebook | Location | What It Does |
 |----------|----------|--------------|
@@ -39,10 +39,13 @@ After the foundation, participants follow a track based on their role. Each trac
 | 2 | Data API | `labs/data-api/` | PostgREST REST access, `authenticator` role, OAuth bearer, RLS |
 | 3 | Agentic Memory | `labs/agentic-memory/` | Persistent AI agent memory with sessions |
 | 4 | Lakebase Search | `labs/lakebase-search/` | Vector + BM25 + hybrid RRF search (enablement is irreversible) |
-| 5 | Store-Aware Retail Search *(advanced)* | `labs/retail-search-context/` | Exact identifier routing plus typed filters, hybrid ranking, and store assortment |
+| 5 | Store-Aware Retail Search *(advanced, standalone)* | `labs/retail-search-context/` | Self-prepared project, exact identifier routing, hybrid ranking, and store assortment |
 | 6 | App Deployment *(capstone)* | `labs/app-deployment/` | Full-stack React + FastAPI Lab Console app |
 
 **Key narrative:** *"Lakebase gives your applications a production-grade PostgreSQL backend inside the Lakehouse — no separate infrastructure, no bespoke sync pipelines."*
+
+Store-Aware Retail Search does not depend on the four labs above it. Open it directly. Its first
+practical cell creates or safely reuses the participant's dedicated project and enables Search.
 
 #### Data & ML Engineers
 
@@ -87,7 +90,7 @@ Every lab lives directly in `labs/`. No track folder structure — tracks are a 
 | Backup & Recovery | `labs/backup-recovery/` | Checkpoint branches, snapshots, PITR, restore, cross-region DR note |
 | Agentic Memory | `labs/agentic-memory/` | Persistent agent memory pattern |
 | Lakebase Search | `labs/lakebase-search/` | Vector + BM25 + hybrid RRF search (enablement irreversible) |
-| Store-Aware Retail Search *(advanced)* | `labs/retail-search-context/` | Exact identifier routing plus typed filters, hybrid ranking, and store assortment in SQL |
+| Store-Aware Retail Search *(advanced, standalone)* | `labs/retail-search-context/` | Self-prepared project, exact identifier routing, hybrid ranking, and store assortment in SQL |
 | Online Feature Store | `labs/online-feature-store/` | Real-time ML feature serving with Lakebase |
 | App Deployment | `labs/app-deployment/` | Full-stack Lab Console app (capstone) |
 
@@ -153,8 +156,21 @@ Highlight one lab from each track to show breadth.
 
 ### Store-Aware Retail Search Deep Dive (60 min)
 
-This advanced lab is notebook-only and does not fit a 20-minute track slot. Enable Lakebase Search
-before participants arrive, then use the exact flow and expected answers in
+This advanced lab is notebook-only, standalone, and does not fit a 20-minute track slot. Do not run
+`notebooks/00_Setup_Lakebase_Project` for it. Each participant opens the retail-search notebook
+directly and runs its first practical cell.
+
+That cell creates the participant's distinct PostgreSQL 17 project when missing. It configures
+`production/primary` at 1/1 CU with a 600-second scale-to-zero timeout, applies
+`purpose=lakebase-workshop` and `lab=retail-search-context`, enables Lakebase Search if needed,
+creates only the participant schema, and validates exact, ANN, and BM25 search before fixtures are
+created. It does not use or seed the foundation project.
+
+Search enablement cannot be undone. It restarts every compute in the project and drops active
+connections. The cell waits for that operation, gets a fresh OAuth credential, and reconnects.
+Rerunning is safe because it accepts only the participant's exact owned project with both tags.
+Participants must be able to create projects and enable Search. Use the exact flow and expected
+answers in
 [`labs/retail-search-context/DEMO.md`](../labs/retail-search-context/DEMO.md).
 
 ## Step-by-Step Setup
@@ -216,6 +232,9 @@ This creates their personal Lakebase project (`lakebase-lab-<username>`), seeds 
 per-user schema (`lakebase_lab_<username>`), and grants the Lab Console app's SP
 access to their project (Step 6).
 
+Skip this step for participants doing only Store-Aware Retail Search. That notebook prepares its own
+dedicated project and schema in the first practical cell.
+
 ### 4. Open the Lab Console
 
 Once the foundation is complete, participants can open the Lab Console from
@@ -229,7 +248,8 @@ Many core labs are available **two ways**, and participants can switch between t
 - **Notebook path:** Open a lab notebook and run cells step-by-step. Each notebook includes a clickable banner linking to the corresponding app page.
 - **App path:** Open the Lab Console and navigate to a lab page. Each page includes a banner linking back to the corresponding notebook.
 
-Advanced labs, including Store-Aware Retail Search, are notebook-only.
+Advanced labs, including Store-Aware Retail Search, are notebook-only. Store-Aware Retail Search is
+also standalone, so participants open it directly without running the foundation notebook.
 
 The cross-links use URL hashes (e.g., `#data`, `#agent`, `#branches`) so participants can deep-link between the two experiences. This means:
 - A facilitator can say *"open the app and go to Data Ops"* or *"open the Data Operations notebook"* — both cover the same material.
@@ -533,11 +553,16 @@ python3 scripts/validate_all.py --twice    # run twice and diff, proving repeata
 Reports are written to `.validation-reports/` (gitignored) as JSON plus Markdown.
 Each lab's expectations live in `scripts/lab_manifest.py`; add an entry there when
 you add a lab. Labs whose feature is disabled on the project (Lakebase Search, the
-Data API) are reported as skipped rather than failed.
+Data API) are reported as skipped rather than failed. Store-Aware Retail Search is different: its
+first practical cell creates its dedicated project and enables Search before the exercises run.
 
 Run `python3 scripts/run_labs_live.py --preflight-only` on the workshop day to
 confirm the project's history retention, endpoint sizing, HA topology, and feature
 flags match what the labs teach.
+
+Store-Aware Retail Search owns a separate project lifecycle, so the default shared-project sweep
+does not run it. Validate it directly with
+`python3 scripts/run_labs_live.py --only retail_search_context --profile <profile>`.
 
 ## Troubleshooting
 
@@ -545,6 +570,8 @@ flags match what the labs teach.
 |-------|----------|
 | `setup.sh` fails at auth | Run `databricks auth login --host <url> --profile lakebase-workshop` manually |
 | Foundation hangs on "Waiting for endpoint" | Endpoint creation can take 2–3 minutes. Let it run. |
+| Store-Aware preparation cannot create the project | The workspace or current participant cannot create a Lakebase project. Ask an admin to verify Lakebase availability and workspace policy, then rerun the same cell. |
+| Store-Aware preparation is waiting after enabling Search | Search restarts the project compute and drops the first connection. Let the cell finish, or rerun it to resume and reconnect with a fresh OAuth credential. |
 | "password authentication failed" | Token expired (1h TTL). Re-run the connection cell. |
 | Lab Console shows "Project Not Found" | The user hasn't run `00_Setup_Lakebase_Project` yet. |
 | Lab Console shows "permission denied for schema" | The user hasn't granted the SP access (Step 6b in setup notebook). Run the App Deployment lab. |
@@ -597,5 +624,9 @@ from databricks.sdk import WorkspaceClient
 w = WorkspaceClient()
 w.postgres.delete_project(name="projects/lakebase-lab-<username>")
 ```
+
+For Store-Aware Retail Search, delete the dedicated project shown by its preparation cell from the
+Lakebase UI when the session is over. Verify that it belongs to the participant and carries both
+`purpose=lakebase-workshop` and `lab=retail-search-context` before deleting it.
 
 Or leave them running — branches with TTLs will auto-expire.

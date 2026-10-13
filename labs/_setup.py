@@ -6,6 +6,7 @@
 
 # COMMAND ----------
 
+import hashlib
 import os
 import re
 import time
@@ -22,6 +23,28 @@ def _sanitize(email):
 
 PROJECT_ID = f"lakebase-lab-{_sanitize(user_email)}"
 PG_SCHEMA  = f"lakebase_lab_{_sanitize(user_email).replace('-', '_')}"
+
+
+def _retail_search_identity(email):
+    """Return one bounded, workspace-unique identity for the standalone lab."""
+    canonical = email.strip().casefold()
+    slug = _sanitize(canonical)[:23].rstrip("-") or "user"
+    fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    return slug, fingerprint
+
+
+def retail_search_project_id_for(email):
+    slug, fingerprint = _retail_search_identity(email)
+    return f"lakebase-retail-search-{slug}-{fingerprint}"
+
+
+def retail_search_schema_for(email):
+    slug, fingerprint = _retail_search_identity(email)
+    return f"retail_search_{slug.replace('-', '_')}_{fingerprint}"
+
+
+RETAIL_SEARCH_PROJECT_ID = retail_search_project_id_for(user_email)
+RETAIL_SEARCH_PG_SCHEMA = retail_search_schema_for(user_email)
 
 _REQUIRED_TABLES = {"products", "events", "agent_sessions", "agent_messages", "agent_memory_store", "audit_log"}
 
@@ -91,12 +114,574 @@ def get_connection(branch="production", connect_retries=3):
     raise last_err
 
 
-def validate_lakebase_search_lab_readiness():
-    """Fail fast unless the current user can run the retail Search lab.
+def prepare_retail_search_lab():
+    """Create or resume the dedicated project, enable Search, and validate it.
 
-    This is intentionally read-only outside one rolled-back SQL transaction. It
-    never creates a project, enables Search, repairs the setup schema, or leaves
-    probe objects or extension changes behind.
+    This is the one workshop path that does not depend on the foundation
+    notebook. It creates a PostgreSQL 17 project for the current user when the
+    exact project ID is missing, enables Lakebase Search on that dedicated
+    project, creates only the participant schema, and then runs the functional
+    readiness probe. Partial progress is deliberately kept so rerunning this
+    cell resumes instead of creating a second project.
+    """
+    from databricks.sdk.errors import (
+        AlreadyExists,
+        NotFound,
+        PermissionDenied,
+        ResourceAlreadyExists,
+        ResourceConflict,
+    )
+    from psycopg import sql as pg_sql
+
+    project_id = RETAIL_SEARCH_PROJECT_ID
+    pg_schema = RETAIL_SEARCH_PG_SCHEMA
+    expected_project_name = f"projects/{project_id}"
+    expected_branch_name = f"{expected_project_name}/branches/production"
+    expected_endpoint_name = f"{expected_branch_name}/endpoints/primary"
+    identity_suffix = project_id.removeprefix("lakebase-retail-search-")
+    expected_display_name = f"Lakebase Workshop: Retail Search: {identity_suffix}"
+    expected_tags = {
+        ("purpose", "lakebase-workshop"),
+        ("lab", "retail-search-context"),
+    }
+    required_preloads = {"lakebase_vector", "lakebase_text"}
+    bootstrap_conn = None
+
+    class PreparationError(RuntimeError):
+        pass
+
+    class OperationStillRunning(PreparationError):
+        pass
+
+    def brief_error(exc):
+        code = getattr(exc, "error_code", None) or getattr(exc, "status_code", None)
+        lines = str(exc).splitlines()
+        first_line = (lines[0] if lines else type(exc).__name__)[:240]
+        return f"{code}: {first_line}" if code else f"{type(exc).__name__}: {first_line}"
+
+    def postgres_headers():
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        workspace_id = getattr(w.config, "workspace_id", None)
+        if workspace_id:
+            headers["X-Databricks-Workspace-Id"] = str(workspace_id)
+        return headers
+
+    def raw_get_project():
+        return w.api_client.do(
+            "GET",
+            f"/api/2.0/postgres/{expected_project_name}",
+            headers=postgres_headers(),
+        )
+
+    def wait_for_raw_project(timeout_seconds=120):
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            try:
+                return raw_get_project()
+            except NotFound:
+                time.sleep(3)
+        raise PreparationError(
+            f"{project_id} was created but did not become visible in time. "
+            "The project was kept; rerun this cell."
+        )
+
+    def wait_for_operation(started, label, timeout_seconds):
+        operation_name = (started or {}).get("name")
+        expected_prefix = f"{expected_project_name}/operations/"
+        if not operation_name or not operation_name.startswith(expected_prefix):
+            raise PreparationError(
+                f"{label} returned an unexpected operation name: {operation_name!r}"
+            )
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            operation = w.postgres.get_operation(name=operation_name)
+            if operation.done:
+                if operation.error:
+                    code = getattr(operation.error, "error_code", None)
+                    message = getattr(operation.error, "message", None)
+                    detail = f"{code}: {message}" if code else str(operation.error)
+                    raise PreparationError(f"{label} failed: {detail}")
+                if operation.response is None:
+                    raise PreparationError(
+                        f"{label} completed without a project response"
+                    )
+                response_name = operation.response.get("name")
+                if response_name != expected_project_name:
+                    raise PreparationError(
+                        f"{label} completed for {response_name!r}, not "
+                        f"{expected_project_name!r}"
+                    )
+                return operation.response
+            time.sleep(5)
+
+        raise OperationStillRunning(
+            f"{label} is still running after {timeout_seconds // 60} minutes. "
+            "The project was kept. Wait a few minutes, then rerun this cell."
+        )
+
+    def project_value(project, key):
+        status = project.get("status") or {}
+        spec = project.get("spec") or {}
+        return status.get(key) if status.get(key) is not None else spec.get(key)
+
+    def project_tags(project):
+        tags = []
+        for source in (project.get("status") or {}, project.get("spec") or {}):
+            for tag in source.get("custom_tags") or []:
+                if isinstance(tag, dict):
+                    tags.append((tag.get("key"), tag.get("value")))
+        return set(tags)
+
+    def cu_value(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def duration_seconds(value):
+        if value is None:
+            return None
+        if hasattr(value, "total_seconds"):
+            return float(value.total_seconds())
+        seconds = getattr(value, "seconds", None)
+        if seconds is not None:
+            try:
+                nanos = float(getattr(value, "nanos", 0) or 0)
+                return float(seconds) + nanos / 1_000_000_000
+            except (TypeError, ValueError):
+                return None
+        if isinstance(value, dict):
+            try:
+                return float(value.get("seconds", 0)) + float(
+                    value.get("nanos", 0)
+                ) / 1_000_000_000
+            except (TypeError, ValueError):
+                return None
+        text = str(value).strip().lower()
+        if text.endswith("s"):
+            text = text[:-1]
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    def validate_project_safety(project):
+        resource_name = project.get("name")
+        resource_id = project.get("project_id")
+        owner = project_value(project, "owner")
+        display_name = project_value(project, "display_name")
+        pg_version = project_value(project, "pg_version")
+        tags = project_tags(project)
+
+        if resource_name != expected_project_name:
+            raise PreparationError(
+                f"refusing to use unexpected project resource {resource_name!r}"
+            )
+        if resource_id is not None and resource_id != project_id:
+            raise PreparationError(
+                f"refusing to use project ID {resource_id!r}; expected {project_id!r}"
+            )
+        if not owner or str(owner).casefold() != user_email.casefold():
+            raise PreparationError(
+                "refusing to enable Search because the exact project is not owned "
+                f"by {user_email}. Search is permanent and restarts project computes."
+            )
+        required_tags_match = all(
+            {value for tag_key, value in tags if tag_key == key} == {expected_value}
+            for key, expected_value in expected_tags
+        )
+        if display_name != expected_display_name or not required_tags_match:
+            raise PreparationError(
+                "refusing to enable Search because this is not verified as the "
+                "current user's dedicated retail Search project. The exact display "
+                "name and required lab tags must all match."
+            )
+        try:
+            pg_major = int(pg_version)
+        except (TypeError, ValueError):
+            raise PreparationError(
+                f"project PostgreSQL version is missing or invalid: {pg_version!r}"
+            )
+        if pg_major != 17:
+            raise PreparationError(
+                f"this lab requires its dedicated PostgreSQL 17 project; found {pg_major}"
+            )
+
+        settings = project_value(project, "default_endpoint_settings") or {}
+        min_cu = cu_value(settings.get("autoscaling_limit_min_cu"))
+        max_cu = cu_value(settings.get("autoscaling_limit_max_cu"))
+        suspend_seconds = duration_seconds(settings.get("suspend_timeout_duration"))
+        if min_cu != 1.0 or max_cu != 1.0:
+            raise PreparationError(
+                "the existing project is not the expected 1/1 CU dedicated lab "
+                "project. No project settings were changed."
+            )
+        if settings.get("no_suspension") is True or not suspend_seconds or suspend_seconds <= 0:
+            raise PreparationError(
+                "the existing project does not have scale-to-zero configured. "
+                "No project settings were changed."
+            )
+
+        return pg_major
+
+    def wait_for_exact_branch(timeout_seconds=300):
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            try:
+                branch = w.postgres.get_branch(name=expected_branch_name)
+            except NotFound:
+                time.sleep(5)
+                continue
+            except PermissionDenied as exc:
+                raise PreparationError(
+                    f"{user_email} cannot access the exact production branch"
+                ) from exc
+            if branch.name != expected_branch_name:
+                raise PreparationError(
+                    f"branch lookup returned {branch.name!r}, not {expected_branch_name!r}"
+                )
+            return branch
+        raise PreparationError("the exact production branch was not created in time")
+
+    def wait_for_exact_endpoint(timeout_seconds=600):
+        deadline = time.monotonic() + timeout_seconds
+        last_state = "NOT_FOUND"
+        while time.monotonic() < deadline:
+            try:
+                endpoint = w.postgres.get_endpoint(name=expected_endpoint_name)
+            except NotFound:
+                time.sleep(5)
+                continue
+            except PermissionDenied as exc:
+                raise PreparationError(
+                    f"{user_email} cannot access {expected_endpoint_name}"
+                ) from exc
+
+            if endpoint.name != expected_endpoint_name:
+                raise PreparationError(
+                    f"endpoint lookup returned {endpoint.name!r}, not the exact primary endpoint"
+                )
+            last_state = str(
+                getattr(endpoint.status, "current_state", "UNKNOWN")
+            ).split(".")[-1].upper()
+            host = getattr(getattr(endpoint.status, "hosts", None), "host", None)
+            if last_state in {"ACTIVE", "IDLE"} and host:
+                min_cu = cu_value(
+                    getattr(endpoint.status, "autoscaling_limit_min_cu", None)
+                )
+                max_cu = cu_value(
+                    getattr(endpoint.status, "autoscaling_limit_max_cu", None)
+                )
+                suspend_seconds = duration_seconds(
+                    getattr(endpoint.status, "suspend_timeout_duration", None)
+                )
+                if min_cu != 1.0 or max_cu != 1.0:
+                    raise PreparationError(
+                        f"production/primary is {min_cu}/{max_cu} CU, not the "
+                        "expected 1/1 CU"
+                    )
+                if not suspend_seconds or suspend_seconds <= 0:
+                    raise PreparationError(
+                        "production/primary does not have scale-to-zero configured"
+                    )
+                return endpoint, last_state
+            time.sleep(5)
+
+        raise PreparationError(
+            f"production/primary did not reach ACTIVE or IDLE; last state was {last_state}"
+        )
+
+    def connect_fresh(timeout_seconds=180):
+        deadline = time.monotonic() + timeout_seconds
+        last_error = None
+        while time.monotonic() < deadline:
+            endpoint, _ = wait_for_exact_endpoint(timeout_seconds=60)
+            try:
+                credential = w.postgres.generate_database_credential(
+                    endpoint=expected_endpoint_name
+                )
+                if not getattr(credential, "token", None):
+                    raise RuntimeError("credential response did not include a token")
+                return psycopg.connect(
+                    host=endpoint.status.hosts.host,
+                    dbname="databricks_postgres",
+                    user=user_email,
+                    password=credential.token,
+                    sslmode="require",
+                    connect_timeout=15,
+                    autocommit=True,
+                    row_factory=dict_row,
+                    options=f"-c search_path={pg_schema},public",
+                )
+            except psycopg.OperationalError as exc:
+                last_error = exc
+                time.sleep(5)
+        raise PreparationError(
+            "OAuth and TLS could not connect to production/primary: "
+            + (brief_error(last_error) if last_error else "connection timed out")
+        )
+
+    def read_preloads(conn):
+        with conn.cursor() as cur:
+            cur.execute("SHOW shared_preload_libraries")
+            preload_value = cur.fetchone()["shared_preload_libraries"] or ""
+        return {
+            item.strip().strip("'\"").rsplit("/", 1)[-1].lower()
+            for item in preload_value.split(",")
+            if item.strip()
+        }
+
+    def wait_for_search_connection(timeout_seconds=600):
+        deadline = time.monotonic() + timeout_seconds
+        missing = required_preloads
+        while time.monotonic() < deadline:
+            remaining = max(1, int(deadline - time.monotonic()))
+            wait_for_exact_endpoint(timeout_seconds=remaining)
+            candidate = connect_fresh(timeout_seconds=min(180, remaining))
+            keep_candidate = False
+            try:
+                missing = required_preloads - read_preloads(candidate)
+                if not missing:
+                    keep_candidate = True
+                    return candidate
+            except (psycopg.OperationalError, psycopg.InterfaceError):
+                pass
+            finally:
+                if not keep_candidate:
+                    candidate.close()
+            time.sleep(5)
+
+        detail = "missing preload: " + ", ".join(sorted(missing))
+        raise PreparationError(
+            "Search enablement or the compute restart is still settling. "
+            f"{detail}. The project was kept; rerun this cell."
+        )
+
+    try:
+        if not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", project_id):
+            raise PreparationError(
+                f"derived project ID {project_id!r} is invalid or longer than 63 characters"
+            )
+        if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", pg_schema):
+            raise PreparationError(
+                f"derived schema {pg_schema!r} is invalid or longer than 63 characters"
+            )
+
+        created_here = False
+        try:
+            project = raw_get_project()
+        except PermissionDenied as exc:
+            raise PreparationError(
+                f"{user_email} cannot inspect {project_id}. The cell will not treat "
+                "a permission denial as a missing project."
+            ) from exc
+        except NotFound:
+            print(f"Creating dedicated Lakebase project: {project_id}")
+            payload = {
+                "spec": {
+                    "display_name": expected_display_name,
+                    "pg_version": 17,
+                    "custom_tags": [
+                        {"key": key, "value": value}
+                        for key, value in sorted(expected_tags)
+                    ],
+                    "default_endpoint_settings": {
+                        "autoscaling_limit_min_cu": 1,
+                        "autoscaling_limit_max_cu": 1,
+                        "suspend_timeout_duration": "600s",
+                    },
+                },
+                "initial_endpoint_spec": {
+                    "autoscaling_limit_min_cu": 1,
+                    "autoscaling_limit_max_cu": 1,
+                    "suspend_timeout_duration": "600s",
+                    "group": {
+                        "min": 1,
+                        "max": 1,
+                        "enable_readable_secondaries": False,
+                    },
+                },
+            }
+            try:
+                started = w.api_client.do(
+                    "POST",
+                    "/api/2.0/postgres/projects",
+                    query={"project_id": project_id},
+                    headers=postgres_headers(),
+                    body=payload,
+                )
+                wait_for_operation(started, "project creation", timeout_seconds=600)
+                created_here = True
+            except OperationStillRunning:
+                raise
+            except PermissionDenied as exc:
+                raise PreparationError(
+                    "the workspace or current identity cannot create the per-user "
+                    "Lakebase project. Project creation is required for this lab. "
+                    "Ask a workspace admin to verify Lakebase availability and "
+                    "workspace policy, then rerun this cell."
+                ) from exc
+            except (AlreadyExists, ResourceAlreadyExists, ResourceConflict):
+                print("Project was created concurrently. Re-reading the exact project.")
+            except PreparationError as exc:
+                raise PreparationError(
+                    "the workspace or current identity could not create the per-user "
+                    "Lakebase project. Ask a workspace admin to verify Lakebase "
+                    f"availability and workspace policy. Detail: {exc}"
+                ) from exc
+            except Exception as exc:
+                raise PreparationError(
+                    "the workspace or current identity could not create the per-user "
+                    "Lakebase project. Ask a workspace admin to verify Lakebase "
+                    f"availability and workspace policy. Detail: {brief_error(exc)}"
+                ) from exc
+            project = wait_for_raw_project()
+        except Exception as exc:
+            raise PreparationError(
+                f"project lookup failed for {project_id}: {brief_error(exc)}"
+            ) from exc
+
+        pg_major = validate_project_safety(project)
+        action = "created" if created_here else "reused"
+        print(
+            f"✓ Dedicated project: {action} {project_id} "
+            f"(PostgreSQL {pg_major}, purpose=lakebase-workshop, "
+            "lab=retail-search-context)"
+        )
+
+        wait_for_exact_branch()
+
+        _endpoint, endpoint_state = wait_for_exact_endpoint()
+        print(f"✓ Production endpoint: {endpoint_state} at 1/1 CU")
+
+        bootstrap_conn = connect_fresh()
+        with bootstrap_conn.cursor() as cur:
+            cur.execute("SHOW server_version_num")
+            server_version_num = int(cur.fetchone()["server_version_num"])
+            cur.execute("SELECT current_user AS role")
+            database_role = cur.fetchone()["role"]
+        if not 170000 <= server_version_num < 180000:
+            raise PreparationError(
+                f"live PostgreSQL is {server_version_num}; this lab requires PostgreSQL 17"
+            )
+        if str(database_role).casefold() != user_email.casefold():
+            raise PreparationError(
+                f"OAuth connected as {database_role!r}, not {user_email!r}"
+            )
+
+        missing_preloads = required_preloads - read_preloads(bootstrap_conn)
+        if missing_preloads:
+            print(
+                "Enabling Lakebase Search on this dedicated project. This cannot be "
+                "undone, restarts every project compute, and drops active connections."
+            )
+            bootstrap_conn.close()
+            bootstrap_conn = None
+            started = None
+            try:
+                started = w.api_client.do(
+                    "POST",
+                    f"/api/2.0/postgres/{expected_project_name}/search-extensions",
+                    headers=postgres_headers(),
+                    body={},
+                )
+            except PermissionDenied as exc:
+                raise PreparationError(
+                    f"{user_email} cannot enable Search on the dedicated project"
+                ) from exc
+            except NotFound as exc:
+                raise PreparationError(
+                    "the Search enablement API is unavailable in this workspace. "
+                    "Verify Lakebase Search availability, or enable it from the "
+                    "project Settings page, then rerun this cell."
+                ) from exc
+            except (AlreadyExists, ResourceAlreadyExists, ResourceConflict):
+                print("Search enablement is already running. Waiting for the restart.")
+
+            if started is not None:
+                wait_for_operation(started, "Search enablement", timeout_seconds=900)
+            bootstrap_conn = wait_for_search_connection(timeout_seconds=600)
+            print("✓ Lakebase Search: enabled and verified")
+        else:
+            print("✓ Lakebase Search: already enabled and verified")
+
+        schema_created = False
+        with bootstrap_conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_get_userbyid(nspowner) AS owner "
+                "FROM pg_namespace WHERE nspname = %s",
+                (pg_schema,),
+            )
+            schema_row = cur.fetchone()
+            schema_created = schema_row is None
+            cur.execute(
+                pg_sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                    pg_sql.Identifier(pg_schema)
+                )
+            )
+            cur.execute(
+                "SELECT pg_get_userbyid(nspowner) AS owner "
+                "FROM pg_namespace WHERE nspname = %s",
+                (pg_schema,),
+            )
+            schema_row = cur.fetchone()
+
+            cur.execute(
+                "SELECT current_user AS role, "
+                "has_schema_privilege(current_user, %s, 'USAGE') AS can_use, "
+                "has_schema_privilege(current_user, %s, 'CREATE') AS can_create",
+                (pg_schema, pg_schema),
+            )
+            privileges = cur.fetchone()
+
+        if not schema_row or str(schema_row["owner"]).casefold() != str(
+            privileges["role"]
+        ).casefold():
+            raise PreparationError(
+                f"participant schema {pg_schema} is not owned by the current database role"
+            )
+        if not privileges["can_use"] or not privileges["can_create"]:
+            raise PreparationError(
+                f"current role needs USAGE and CREATE on participant schema {pg_schema}"
+            )
+        schema_action = "created" if schema_created else "reused"
+        print(f"✓ Participant schema: {schema_action} {pg_schema} (no foundation tables seeded)")
+
+        bootstrap_conn.close()
+        bootstrap_conn = None
+
+    except PreparationError as exc:
+        if bootstrap_conn is not None:
+            bootstrap_conn.close()
+        print(f"\n✗ NOT READY: {exc}")
+        print(
+            "Any project, Search, or schema state already created was kept. "
+            "Fix the stated issue, then rerun this same cell."
+        )
+        raise RuntimeError(f"Retail Search preparation failed: {exc}") from exc
+    except Exception as exc:
+        if bootstrap_conn is not None:
+            bootstrap_conn.close()
+        detail = brief_error(exc)
+        print(f"\n✗ NOT READY: unexpected preparation error: {detail}")
+        print(
+            "Any project, Search, or schema state already created was kept. "
+            "Fix the stated issue, then rerun this same cell."
+        )
+        raise RuntimeError(f"Retail Search preparation failed: {detail}") from exc
+
+    return _validate_retail_search_runtime(project_id, pg_schema)
+
+
+def _validate_retail_search_runtime(project_id, pg_schema):
+    """Fail fast unless the prepared retail Search project can run every exercise.
+
+    This validation is read-only outside one rolled-back SQL transaction. It
+    leaves no probe objects, rows, indexes, or extension-state changes behind.
     """
     import secrets
 
@@ -133,17 +718,17 @@ def validate_lakebase_search_lab_readiness():
     passed("Identity", user_email)
 
     try:
-        project = w.postgres.get_project(name=f"projects/{PROJECT_ID}")
-        passed("Project access", PROJECT_ID)
+        project = w.postgres.get_project(name=f"projects/{project_id}")
+        passed("Project access", project_id)
     except PermissionDenied:
         failed(
             "Project access",
-            f"{user_email} cannot access {PROJECT_ID}. Ask the facilitator to grant access.",
+            f"{user_email} cannot access {project_id}. Ask the facilitator to grant access.",
         )
     except NotFound:
         failed(
             "Project access",
-            f"{PROJECT_ID} is missing or not visible. Run 00_Setup_Lakebase_Project or ask the facilitator.",
+            f"{project_id} is missing after preparation. Rerun the prepare cell.",
         )
     except Exception as exc:
         failed("Project access", brief_error(exc))
@@ -151,7 +736,7 @@ def validate_lakebase_search_lab_readiness():
     if project is not None:
         try:
             branch = w.postgres.get_branch(
-                name=f"projects/{PROJECT_ID}/branches/production"
+                name=f"projects/{project_id}/branches/production"
             )
             passed("Production branch", branch.name)
         except Exception as exc:
@@ -162,7 +747,7 @@ def validate_lakebase_search_lab_readiness():
     if branch is not None:
         try:
             endpoint = w.postgres.get_endpoint(
-                name=f"projects/{PROJECT_ID}/branches/production/endpoints/primary"
+                name=f"projects/{project_id}/branches/production/endpoints/primary"
             )
             endpoint_state = str(
                 getattr(endpoint.status, "current_state", "UNKNOWN")
@@ -201,7 +786,7 @@ def validate_lakebase_search_lab_readiness():
                     connect_timeout=15,
                     autocommit=True,
                     row_factory=dict_row,
-                    options=f"-c search_path={PG_SCHEMA},public",
+                    options=f"-c search_path={pg_schema},public",
                 )
                 passed("PostgreSQL connection", "OAuth and TLS connection succeeded")
             except Exception as exc:
@@ -217,12 +802,12 @@ def validate_lakebase_search_lab_readiness():
             with preflight_conn.cursor() as cur:
                 cur.execute("SHOW server_version_num")
                 server_version_num = int(cur.fetchone()["server_version_num"])
-            if server_version_num >= 160000:
+            if 170000 <= server_version_num < 180000:
                 passed("Live PostgreSQL version", str(server_version_num))
             else:
                 failed(
                     "Live PostgreSQL version",
-                    f"expected 160000 or later, found {server_version_num}",
+                    f"expected PostgreSQL 17, found {server_version_num}",
                 )
         except Exception as exc:
             failed("Live PostgreSQL version", brief_error(exc))
@@ -242,7 +827,7 @@ def validate_lakebase_search_lab_readiness():
                     "Lakebase Search enabled",
                     "missing preload: "
                     + ", ".join(sorted(missing_preloads))
-                    + ". Enable Search ahead of time on this dedicated project.",
+                    + ". Preparation did not finish cleanly; rerun the same cell.",
                 )
             else:
                 search_preloaded = True
@@ -278,23 +863,28 @@ def validate_lakebase_search_lab_readiness():
         try:
             with preflight_conn.cursor() as cur:
                 cur.execute(
-                    "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = %s AND table_type = 'BASE TABLE'",
-                    (PG_SCHEMA,),
+                    "SELECT pg_get_userbyid(nspowner) AS owner "
+                    "FROM pg_namespace WHERE nspname = %s",
+                    (pg_schema,),
                 )
-                foundation_tables = {row["table_name"] for row in cur.fetchall()}
-            missing_tables = _REQUIRED_TABLES - foundation_tables
-            if missing_tables:
+                schema_row = cur.fetchone()
+                cur.execute("SELECT current_user AS role")
+                current_role = cur.fetchone()["role"]
+            if schema_row is None:
+                failed("Participant schema", f"{pg_schema} does not exist")
+            elif str(schema_row["owner"]).casefold() != str(current_role).casefold():
                 failed(
-                    "Foundation schema",
-                    f"{PG_SCHEMA} is incomplete; missing "
-                    + ", ".join(sorted(missing_tables)),
+                    "Participant schema",
+                    f"{pg_schema} is owned by {schema_row['owner']}, not {current_role}",
                 )
             else:
                 schema_ready = True
-                passed("Foundation schema", f"{PG_SCHEMA} contains all setup tables")
+                passed(
+                    "Participant schema",
+                    f"{pg_schema} exists and is owned by the current role",
+                )
         except Exception as exc:
-            failed("Foundation schema", brief_error(exc))
+            failed("Participant schema", brief_error(exc))
 
         if schema_ready:
             try:
@@ -314,7 +904,7 @@ def validate_lakebase_search_lab_readiness():
                         "has_schema_privilege(current_user, %s, 'USAGE') AS can_use, "
                         "has_schema_privilege(current_user, %s, 'CREATE') AS can_create, "
                         "current_user AS role",
-                        (PG_SCHEMA, PG_SCHEMA),
+                        (pg_schema, pg_schema),
                     )
                     privilege_row = cur.fetchone()
                     cur.execute(
@@ -332,7 +922,7 @@ def validate_lakebase_search_lab_readiness():
                         "'retail_product_search_ann', 'retail_product_search_bm25', "
                         "'retail_product_search_attributes', "
                         "'retail_store_product_eligibility')",
-                        (PG_SCHEMA,),
+                        (pg_schema,),
                     )
                     existing_lab_objects = cur.fetchall()
                 existing_lab_tables = [
@@ -362,7 +952,7 @@ def validate_lakebase_search_lab_readiness():
                 if not privilege_row["can_use"] or not privilege_row["can_create"]:
                     failed(
                         "Lab object permissions",
-                        f"{privilege_row['role']} needs USAGE and CREATE on {PG_SCHEMA}",
+                        f"{privilege_row['role']} needs USAGE and CREATE on {pg_schema}",
                     )
                 elif wrong_relation_kind:
                     failed(
@@ -391,7 +981,7 @@ def validate_lakebase_search_lab_readiness():
             except Exception as exc:
                 failed("Lab object permissions", brief_error(exc))
         else:
-            skipped("Lab object permissions", "foundation schema check failed")
+            skipped("Lab object permissions", "participant schema check failed")
 
         if search_preloaded and extensions_available and schema_writable:
             preflight_conn.autocommit = False
@@ -409,7 +999,7 @@ def validate_lakebase_search_lab_readiness():
                     extensions_before = {row["extname"] for row in cur.fetchall()}
                     cur.execute(
                         pg_sql.SQL("SET LOCAL search_path TO {}, public").format(
-                            pg_sql.Identifier(PG_SCHEMA)
+                            pg_sql.Identifier(pg_schema)
                         )
                     )
                     cur.execute("CREATE EXTENSION IF NOT EXISTS lakebase_vector CASCADE")
@@ -422,7 +1012,7 @@ def validate_lakebase_search_lab_readiness():
                             "id INTEGER PRIMARY KEY, sku TEXT NOT NULL, "
                             "embedding VECTOR(8) NOT NULL, search_tsv TSVECTOR NOT NULL)"
                         ).format(
-                            pg_sql.Identifier(PG_SCHEMA),
+                            pg_sql.Identifier(pg_schema),
                             pg_sql.Identifier(probe_table),
                         )
                     )
@@ -434,7 +1024,7 @@ def validate_lakebase_search_lab_readiness():
                             "(2, 'READY-2', '[0,1,0,0,0,0,0,0]'::vector, "
                             "to_tsvector('simple', 'garden hose'))"
                         ).format(
-                            pg_sql.Identifier(PG_SCHEMA),
+                            pg_sql.Identifier(pg_schema),
                             pg_sql.Identifier(probe_table),
                         )
                     )
@@ -443,7 +1033,7 @@ def validate_lakebase_search_lab_readiness():
                     cur.execute(
                         pg_sql.SQL("CREATE UNIQUE INDEX {} ON {}.{} (sku)").format(
                             pg_sql.Identifier(exact_index),
-                            pg_sql.Identifier(PG_SCHEMA),
+                            pg_sql.Identifier(pg_schema),
                             pg_sql.Identifier(probe_table),
                         )
                     )
@@ -454,7 +1044,7 @@ def validate_lakebase_search_lab_readiness():
                             "(embedding vector_cosine_ops)"
                         ).format(
                             pg_sql.Identifier(ann_index),
-                            pg_sql.Identifier(PG_SCHEMA),
+                            pg_sql.Identifier(pg_schema),
                             pg_sql.Identifier(probe_table),
                         )
                     )
@@ -464,7 +1054,7 @@ def validate_lakebase_search_lab_readiness():
                             "CREATE INDEX {} ON {}.{} USING lakebase_bm25 (search_tsv)"
                         ).format(
                             pg_sql.Identifier(bm25_index),
-                            pg_sql.Identifier(PG_SCHEMA),
+                            pg_sql.Identifier(pg_schema),
                             pg_sql.Identifier(probe_table),
                         )
                     )
@@ -474,7 +1064,7 @@ def validate_lakebase_search_lab_readiness():
                         pg_sql.SQL(
                             "SELECT sku FROM {}.{} WHERE sku = 'READY-1'"
                         ).format(
-                            pg_sql.Identifier(PG_SCHEMA),
+                            pg_sql.Identifier(pg_schema),
                             pg_sql.Identifier(probe_table),
                         )
                     )
@@ -487,7 +1077,7 @@ def validate_lakebase_search_lab_readiness():
                             "SELECT sku FROM {}.{} "
                             "ORDER BY embedding <=> '[1,0,0,0,0,0,0,0]'::vector LIMIT 1"
                         ).format(
-                            pg_sql.Identifier(PG_SCHEMA),
+                            pg_sql.Identifier(pg_schema),
                             pg_sql.Identifier(probe_table),
                         )
                     )
@@ -501,7 +1091,7 @@ def validate_lakebase_search_lab_readiness():
                             "ORDER BY search_tsv <@> to_bm25query("
                             "to_tsvector('simple', 'deck driver'), %s) LIMIT 1"
                         ).format(
-                            pg_sql.Identifier(PG_SCHEMA),
+                            pg_sql.Identifier(pg_schema),
                             pg_sql.Identifier(probe_table),
                         ),
                         (bm25_index,),
@@ -523,7 +1113,7 @@ def validate_lakebase_search_lab_readiness():
                 with preflight_conn.cursor() as cur:
                     cur.execute(
                         "SELECT to_regclass(%s) AS probe_object",
-                        (f"{PG_SCHEMA}.{probe_table}",),
+                        (f"{pg_schema}.{probe_table}",),
                     )
                     probe_object = cur.fetchone()["probe_object"]
                     cur.execute("SELECT extname FROM pg_extension ORDER BY extname")
@@ -572,7 +1162,7 @@ def validate_lakebase_search_lab_readiness():
             "Live PostgreSQL version",
             "Lakebase Search enabled",
             "Search extensions available",
-            "Foundation schema",
+            "Participant schema",
             "Lab object permissions",
             "Transactional Search probe",
             "Preflight cleanup",
@@ -599,7 +1189,7 @@ def validate_lakebase_search_lab_readiness():
     passed_checks = sum(status == "PASS" for status, _, _ in readiness)
     print(
         f"\n✓ READY: all {passed_checks} checks passed. "
-        "No project settings or lab data changed."
+        "The dedicated project is prepared, and no probe objects remain."
     )
     return preflight_conn
 
@@ -892,8 +1482,10 @@ def show_view_link(label, url):
     except Exception:
         print(f"{label}: {url}")
 
-print(f"Project: {PROJECT_ID}")
-print(f"Schema:  {PG_SCHEMA}")
-print(f"User:    {user_email}")
+print(f"Shared-lab project:          {PROJECT_ID}")
+print(f"Shared-lab schema:           {PG_SCHEMA}")
+print(f"Standalone Search project:   {RETAIL_SEARCH_PROJECT_ID}")
+print(f"Standalone Search schema:    {RETAIL_SEARCH_PG_SCHEMA}")
+print(f"User:                        {user_email}")
 if APP_URL:
     print(f"Lab App: {APP_URL}")

@@ -4,7 +4,7 @@
 # MAGIC
 # MAGIC > **Modification notice:** Added by Ryan Cicak on 2026-10-13 as a fictional, store-aware retail search lab.
 # MAGIC
-# MAGIC **Path:** Store-Aware Retail Search &nbsp;|&nbsp; **Prerequisite:** `00_Setup_Lakebase_Project`
+# MAGIC **Path:** Store-Aware Retail Search &nbsp;|&nbsp; **Standalone lab**
 # MAGIC
 # MAGIC This lab tests one thing:
 # MAGIC
@@ -25,12 +25,12 @@
 # MAGIC %md
 # MAGIC ## Before you run
 # MAGIC
-# MAGIC This lab requires PostgreSQL 16 or later and Lakebase Search enabled on the workshop project.
-# MAGIC Enabling Search restarts every compute in the project, drops active connections, and cannot be
-# MAGIC undone. Enable it ahead of time in a dedicated workshop project.
+# MAGIC Run this notebook directly. The first practical cell creates or safely reuses your dedicated
+# MAGIC PostgreSQL 17 project, enables Lakebase Search if needed, creates only your participant schema,
+# MAGIC and validates every operation used below. You do not need to run `00_Setup_Lakebase_Project`.
 # MAGIC
-# MAGIC The notebook does not enable Search or change project settings. If the extensions are not
-# MAGIC available, it fails immediately instead of skipping the exercises.
+# MAGIC Enabling Search cannot be undone. It restarts every compute in this dedicated project and drops
+# MAGIC active connections. The preparation cell waits for the restart and reconnects with fresh OAuth.
 # MAGIC
 # MAGIC This 24-row fixture shows SQL behavior only. It does not measure relevance, latency, cost,
 # MAGIC recall, or production scale, and it does not compare search systems.
@@ -50,14 +50,15 @@ dbutils.library.restartPython()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 0. Check readiness before touching lab data
+# MAGIC ## 0. Prepare and validate
 # MAGIC
-# MAGIC This checks the pre-created project, PostgreSQL, the production endpoint, OAuth, Search,
-# MAGIC and every table and index operation used by the lab. If it reports `NOT READY`, stop here.
+# MAGIC This creates the project when it is missing, enables Search when needed, creates your schema,
+# MAGIC and runs one rolled-back exact, vector, and BM25 probe before touching fixture data. Rerunning
+# MAGIC this cell resumes the same owned, dedicated project.
 
 # COMMAND ----------
 
-conn = validate_lakebase_search_lab_readiness()
+conn = prepare_retail_search_lab()
 
 # COMMAND ----------
 
@@ -103,9 +104,8 @@ try:
     execute("CREATE EXTENSION IF NOT EXISTS lakebase_vector CASCADE;")
     execute("CREATE EXTENSION IF NOT EXISTS lakebase_text;")
 except Exception as exc:
-    print("✗ Lakebase Search extensions are unavailable for this project.")
-    print("  Enable Search on a PostgreSQL 16+ workshop project, then rerun the notebook.")
-    raise RuntimeError("Lakebase Search is required for this lab") from exc
+    print("✗ Lakebase Search extension installation failed after preparation.")
+    raise RuntimeError("Lakebase Search extension installation failed") from exc
 
 print("✓ Lakebase Search extensions ready")
 

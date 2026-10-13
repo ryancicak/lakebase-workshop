@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""One command for the whole validation sweep: static, live labs, and the app.
+"""One command for a validation sweep: static, live labs, and the app.
 
 Stages, in order:
   1. static     validate_workshop.py     (compiles, structure, stale facts, secrets)
-  2. reset      reset_lab_state.py       (clean slate so the run is repeatable)
-  3. labs       run_labs_live.py         (execute every lab, assert it worked)
+  2. reset      reset_lab_state.py       (clean slate for the selected lifecycle)
+  3. labs       run_labs_live.py         (execute selected labs, assert they worked)
   4. app        validate_app.py          (assert the app reflects the lab results)
 
 Usage:
@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import harness_common as h
+import lab_manifest as manifest
 
 # Labs whose provisioning waits dominate the sweep; --fast omits them.
 SLOW_LABS = ("backup", "reverse_etl", "feature_store", "branches")
@@ -65,7 +66,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Run the full workshop validation sweep.")
     ap.add_argument("--profile", help="Databricks CLI profile")
     ap.add_argument("--target", default="dev", help="bundle target")
-    ap.add_argument("--only", help="comma-separated lab ids for the live stage")
+    ap.add_argument(
+        "--only",
+        help="comma-separated lab ids for reset and live; standalone skips app checks",
+    )
     ap.add_argument("--fast", action="store_true", help=f"skip slow labs ({', '.join(SLOW_LABS)})")
     ap.add_argument("--skip-static", action="store_true")
     ap.add_argument("--skip-reset", action="store_true")
@@ -77,6 +81,13 @@ def main() -> int:
     ap.add_argument("--data-api-url", default="")
     ap.add_argument("--sp-app-id", default="")
     args = ap.parse_args()
+
+    try:
+        selected_labs = manifest.select_run_labs(args.only)
+    except ValueError as exc:
+        h.say(f"{h.C.R}{exc}{h.C.X}")
+        return 2
+    standalone_only = bool(args.only) and all(lab.standalone for lab in selected_labs)
 
     scripts = Path("scripts")
     common: list[str] = []
@@ -99,7 +110,10 @@ def main() -> int:
         label = f" (pass {attempt}/{passes})" if passes > 1 else ""
 
         if not args.skip_reset:
-            code, secs = stage(f"Reset lab state{label}", [str(scripts / "reset_lab_state.py"), *common])
+            reset_argv = [str(scripts / "reset_lab_state.py"), *common]
+            if args.only:
+                reset_argv += ["--only", args.only]
+            code, secs = stage(f"Reset lab state{label}", reset_argv)
             outcomes.append((f"reset{label}", code, secs))
             if code != 0:
                 h.say(f"\n{h.C.R}Reset failed — a dirty project makes the run unrepeatable.{h.C.X}")
@@ -122,8 +136,15 @@ def main() -> int:
             outcomes.append((f"labs{label}", code, secs))
             lab_statuses.append(snapshot_statuses(latest("live-labs")))
 
-        if not args.skip_app:
-            code, secs = stage(f"Lab Console API{label}", [str(scripts / "validate_app.py"), *common])
+        if not args.skip_app and standalone_only:
+            h.say(
+                f"\n{h.C.DIM}Skipping Lab Console API{label}: "
+                "the selected standalone lab does not use the app."
+                f"{h.C.X}"
+            )
+        elif not args.skip_app:
+            app_argv = [str(scripts / "validate_app.py"), *common]
+            code, secs = stage(f"Lab Console API{label}", app_argv)
             outcomes.append((f"app{label}", code, secs))
 
     drift: list[str] = []

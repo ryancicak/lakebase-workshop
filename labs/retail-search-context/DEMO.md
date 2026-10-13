@@ -74,14 +74,21 @@ The exact identifier exercise uses SKU `10001234`.
 
 The notebook checks every expected result.
 
-Before those exercises, the first executable lab cell must report `READY`. It checks project access,
-PostgreSQL, the production endpoint, OAuth, Search preload, both extensions, the setup schema, and a
-rolled-back exact/vector/BM25 probe. If it reports `NOT READY`, stop there. Do not debug setup during
-the customer-driven session.
+Before those exercises, run the first practical cell. It creates or safely reuses the current
+participant's dedicated PostgreSQL 17 project, configures `production/primary` at 1/1 CU with a
+600-second scale-to-zero timeout, tags the project `purpose=lakebase-workshop` and
+`lab=retail-search-context`, and enables Lakebase Search if needed. It waits for the restart,
+reconnects, creates only the participant schema, and runs a rolled-back exact/ANN/BM25 probe.
+Continue only after it reports `READY`.
+
+The cell is built to resume. If project creation, Search enablement, or the compute restart is still
+in progress, rerun it. It will reuse only the exact project owned by that participant with both lab
+tags. Do not switch to `notebooks/00_Setup_Lakebase_Project` or seed the foundation project. Each
+participant must be able to create projects and enable Search.
 
 ## 60-minute facilitation flow
 
-1. Start with the current split in 5 minutes: retrieve products, then add store data. Ask whether store rules should affect the candidate set earlier.
+1. Run the prepare-and-validate cell, then start with the current split in 5 minutes: retrieve products, then add store data. Ask whether store rules should affect the candidate set earlier.
 2. Inspect the schema and expected answers in 5 minutes.
 3. Look up the exact SKU in 8 minutes. Exact IDs do not need vector search.
 4. Run the hybrid query in 12 minutes. Compare vector and BM25 ranks, then flip the weights once.
@@ -97,7 +104,7 @@ the customer-driven session.
 - Price and aisle are displayed but do not affect ranking.
 - The candidate limit, weights, and rule order are demo choices. Test them before using this pattern.
 - A split retrieval path may support the same rule. This lab only shows how to do it in one SQL query.
-- Enabling Lakebase Search restarts computes and cannot be undone. Pre-enable it in a dedicated workshop project.
+- Enabling Lakebase Search restarts computes, drops active connections, and cannot be undone. The first practical cell does this only in the participant's dedicated lab project.
 
 ## Visual style
 

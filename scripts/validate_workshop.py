@@ -31,6 +31,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import lab_manifest as manifest
+
 REPO = Path(__file__).resolve().parent.parent
 
 # Directories we never scan.
@@ -196,6 +198,22 @@ def check_structure(res: Result) -> None:
         folder = m.group(1)
         if not (labs_dir / folder).is_dir():
             res.fail(f"labs/README.md references labs/{folder}/ which does not exist")
+
+
+def check_manifest(res: Result) -> None:
+    print(f"{C.B}▶ Lab manifest{C.X}")
+    res.checked += 1
+    problems = manifest.validate_manifest()
+    if problems:
+        for problem in problems:
+            res.fail(f"scripts/lab_manifest.py: {problem}")
+        print(f"  {C.R}✗{C.X} {len(problems)} manifest problem(s)")
+        return
+    standalone = [lab.id for lab in manifest.LABS if lab.standalone]
+    print(
+        f"  {C.G}✓{C.X} manifest valid; standalone: "
+        + (", ".join(standalone) if standalone else "(none)")
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -453,6 +471,7 @@ def main() -> int:
 
     check_notebooks(res)
     check_structure(res)
+    check_manifest(res)
     check_regressions(res)
     check_pg_catalog_queries(res)
     check_links(res)

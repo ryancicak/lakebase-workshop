@@ -73,6 +73,105 @@ def _check_project_exists(ctx: h.Ctx, _arg: str) -> tuple[bool, str]:
         return False, str(e)[:200]
 
 
+def _check_retail_project_contract(ctx: h.Ctx, _arg: str) -> tuple[bool, str]:
+    expected_name = ctx.project_name()
+    expected_endpoint = f"{ctx.branch_name('production')}/endpoints/primary"
+    required_tags = {
+        "purpose": "lakebase-workshop",
+        "lab": "retail-search-context",
+    }
+
+    try:
+        project = ctx.w.postgres.get_project(name=expected_name)
+        endpoint = ctx.w.postgres.get_endpoint(name=expected_endpoint)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {str(exc)[:180]}"
+
+    status = getattr(project, "status", None)
+    spec = getattr(project, "spec", None)
+
+    def value(name):
+        current = getattr(status, name, None)
+        return current if current is not None else getattr(spec, name, None)
+
+    tag_values = {}
+    for source in (status, spec):
+        for tag in getattr(source, "custom_tags", None) or []:
+            if isinstance(tag, dict):
+                key, tag_value = tag.get("key"), tag.get("value")
+            else:
+                key = getattr(tag, "key", None)
+                tag_value = getattr(tag, "value", None)
+            tag_values.setdefault(key, set()).add(tag_value)
+
+    problems = []
+    if getattr(project, "name", None) != expected_name:
+        problems.append(f"resource name is {getattr(project, 'name', None)!r}")
+    reported_id = getattr(project, "project_id", None) or value("project_id")
+    if reported_id != ctx.project_id:
+        problems.append(f"project id is {reported_id!r}")
+
+    project_suffix = ctx.project_id.removeprefix("lakebase-retail-search-")
+    expected_display_name = f"Lakebase Workshop: Retail Search: {project_suffix}"
+    display_name = value("display_name")
+    if display_name != expected_display_name:
+        problems.append(f"display name is {display_name!r}")
+
+    owner = value("owner")
+    if not owner or str(owner).strip().casefold() != ctx.user_email.strip().casefold():
+        problems.append(f"owner is {owner!r}")
+
+    try:
+        pg_major = int(value("pg_version"))
+    except (TypeError, ValueError):
+        pg_major = None
+    if pg_major != 17:
+        problems.append(f"PostgreSQL major version is {pg_major!r}")
+
+    for key, expected in required_tags.items():
+        values = tag_values.get(key, set())
+        if expected not in values:
+            problems.append(f"missing tag: {key}={expected}")
+        elif values != {expected}:
+            ordered = sorted(values, key=lambda item: str(item))
+            problems.append(f"conflicting values for tag {key}: {ordered!r}")
+
+    defaults = value("default_endpoint_settings")
+    default_min = getattr(defaults, "autoscaling_limit_min_cu", None)
+    default_max = getattr(defaults, "autoscaling_limit_max_cu", None)
+    default_suspend = h._duration_seconds(
+        getattr(defaults, "suspend_timeout_duration", None)
+    )
+    if default_min != 1 or default_max != 1:
+        problems.append(f"project defaults are {default_min}/{default_max} CU")
+    if (
+        getattr(defaults, "no_suspension", None) is True
+        or default_suspend is None
+        or default_suspend <= 0
+    ):
+        problems.append("project defaults do not enable scale-to-zero")
+
+    endpoint_status = getattr(endpoint, "status", None)
+    endpoint_min = getattr(endpoint_status, "autoscaling_limit_min_cu", None)
+    endpoint_max = getattr(endpoint_status, "autoscaling_limit_max_cu", None)
+    endpoint_suspend = h._duration_seconds(
+        getattr(endpoint_status, "suspend_timeout_duration", None)
+    )
+    if getattr(endpoint, "name", None) != expected_endpoint:
+        problems.append(f"endpoint is {getattr(endpoint, 'name', None)!r}")
+    if endpoint_min != 1 or endpoint_max != 1:
+        problems.append(f"production/primary is {endpoint_min}/{endpoint_max} CU")
+    if endpoint_suspend is None or endpoint_suspend <= 0:
+        problems.append("production/primary does not enable scale-to-zero")
+
+    if problems:
+        return False, "; ".join(problems)
+    return (
+        True,
+        f"{ctx.project_id}: owner, PG17, tags, 1/1 CU, and scale-to-zero verified",
+    )
+
+
 def _check_endpoint_ready(ctx: h.Ctx, branch: str) -> tuple[bool, str]:
     """Ready means past provisioning. IDLE is healthy: it wakes on connect."""
     try:
@@ -245,6 +344,7 @@ def _warehouse_id(ctx: h.Ctx) -> str:
 
 SDK_CHECKS = {
     "project_exists": _check_project_exists,
+    "retail_project_contract": _check_retail_project_contract,
     "endpoint_ready": _check_endpoint_ready,
     "branch_exists": _check_branch_exists,
     "project_acl_has_app_sp": _check_project_acl_has_app_sp,
@@ -478,20 +578,23 @@ def run_lab(ctx: h.Ctx, lab: Lab, file_path: str, params: dict[str, str]) -> Lab
 # Selection + reporting
 # --------------------------------------------------------------------------- #
 def select_labs(args) -> list[Lab]:
-    labs = list(manifest.RUN_ORDER)
-    if args.only:
-        wanted = {x.strip() for x in args.only.split(",") if x.strip()}
-        unknown = wanted - set(manifest.LABS_BY_ID)
-        if unknown:
-            h.say(f"{h.C.R}unknown lab id(s):{h.C.X} {', '.join(sorted(unknown))}")
-            sys.exit(2)
-        labs = [lab for lab in labs if lab.id in wanted]
+    try:
+        labs = list(manifest.select_run_labs(args.only))
+    except ValueError as exc:
+        h.say(f"{h.C.R}{exc}{h.C.X}")
+        sys.exit(2)
     if args.skip:
         skip = {x.strip() for x in args.skip.split(",") if x.strip()}
         labs = [lab for lab in labs if lab.id not in skip]
     if getattr(args, "from_lab", None):
         if args.from_lab not in manifest.LABS_BY_ID:
             h.say(f"{h.C.R}unknown lab id:{h.C.X} {args.from_lab}")
+            sys.exit(2)
+        if manifest.LABS_BY_ID[args.from_lab].standalone:
+            h.say(
+                f"{h.C.R}{args.from_lab} is standalone. "
+                f"Run it with --only {args.from_lab}.{h.C.X}"
+            )
             sys.exit(2)
         start = manifest.LABS_BY_ID[args.from_lab].order
         labs = [lab for lab in labs if lab.order >= start]
@@ -546,7 +649,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Run the workshop labs live and assert they worked.")
     ap.add_argument("--profile", help="Databricks CLI profile (defaults to .workshop-config PROFILE)")
     ap.add_argument("--target", default="dev", help="bundle target (default: dev)")
-    ap.add_argument("--only", help="comma-separated lab ids to run")
+    ap.add_argument(
+        "--only",
+        help="comma-separated lab ids to run; required for standalone labs",
+    )
     ap.add_argument("--skip", help="comma-separated lab ids to skip")
     ap.add_argument("--from", dest="from_lab", help="start at this lab id and continue in order")
     ap.add_argument("--no-deploy", action="store_true", help="skip `databricks bundle deploy`")
@@ -565,7 +671,10 @@ def main() -> int:
             h.say(f"  - {p}")
         return 2
 
+    labs = select_labs(args)
     ctx = h.build_ctx(profile=args.profile, target=args.target)
+    if any(lab.id == "retail_search_context" for lab in labs):
+        ctx = h.with_retail_search_project(ctx)
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
     h.say(f"{h.C.B}Live lab validation{h.C.X}  {h.C.DIM}{ctx.host}{h.C.X}")
     h.say(f"{h.C.DIM}project {ctx.project_id} | schema {ctx.pg_schema} | profile {ctx.profile}{h.C.X}\n")
@@ -586,7 +695,6 @@ def main() -> int:
     if args.preflight_only:
         return 0
 
-    labs = select_labs(args)
     if args.dry_run:
         h.say(f"\n{h.C.B}▶ Plan{h.C.X}")
         for lab in labs:

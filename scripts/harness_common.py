@@ -12,13 +12,14 @@ different project than the labs create.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import subprocess
 import sys
 import time
 import urllib.parse
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -53,6 +54,36 @@ def project_id_for(email: str) -> str:
 
 def pg_schema_for(email: str) -> str:
     return f"lakebase_lab_{sanitize(email).replace('-', '_')}"
+
+
+_RETAIL_PROJECT_PREFIX = "lakebase-retail-search-"
+_RETAIL_SCHEMA_PREFIX = "retail_search_"
+_RETAIL_SLUG_LEN = 23
+_RETAIL_FINGERPRINT_LEN = 16
+_MAX_IDENTIFIER_LEN = 63
+
+
+def _retail_search_identity_for(email: str) -> tuple[str, str]:
+    canonical = email.strip().casefold()
+    slug = sanitize(canonical)[:_RETAIL_SLUG_LEN].rstrip("-") or "user"
+    fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[
+        :_RETAIL_FINGERPRINT_LEN
+    ]
+    project_id = f"{_RETAIL_PROJECT_PREFIX}{slug}-{fingerprint}"
+    pg_schema = (
+        f"{_RETAIL_SCHEMA_PREFIX}{slug.replace('-', '_')}_{fingerprint}"
+    )
+    if len(project_id) > _MAX_IDENTIFIER_LEN:
+        raise AssertionError("retail Search project ID exceeds 63 characters")
+    return project_id, pg_schema
+
+
+def retail_search_project_id_for(email: str) -> str:
+    return _retail_search_identity_for(email)[0]
+
+
+def retail_search_pg_schema_for(email: str) -> str:
+    return _retail_search_identity_for(email)[1]
 
 
 # --------------------------------------------------------------------------- #
@@ -104,6 +135,12 @@ class Ctx:
 
     def branch_name(self, branch: str) -> str:
         return f"projects/{self.project_id}/branches/{branch}"
+
+
+def with_retail_search_project(ctx: Ctx) -> Ctx:
+    """Return a context routed to the standalone retail Search project."""
+    project_id, pg_schema = _retail_search_identity_for(ctx.user_email)
+    return replace(ctx, project_id=project_id, pg_schema=pg_schema)
 
 
 def build_ctx(profile: str | None = None, target: str = "dev", uc_catalog: str = "main") -> Ctx:

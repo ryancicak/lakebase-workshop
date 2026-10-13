@@ -10,7 +10,13 @@ It uses normal PostgreSQL joins and predicates to apply inventory and assortment
 
 ## What to run
 
-Run [`Retail_Search_Context.py`](Retail_Search_Context.py) after the foundation notebook.
+Open [`Retail_Search_Context.py`](Retail_Search_Context.py) and run it directly. This lab is
+standalone. Do not run `notebooks/00_Setup_Lakebase_Project` first.
+
+The first practical cell creates a distinct project for the current participant when missing. It
+prepares PostgreSQL 17, configures `production/primary` at 1/1 CU with a 600-second scale-to-zero timeout,
+enables Lakebase Search, waits and reconnects, creates only that participant's lab schema, and
+validates exact, ANN, and BM25 search. It does not use or seed the foundation project.
 
 Plan for about 60 minutes:
 
@@ -27,17 +33,23 @@ Plan for about 60 minutes:
 
 ## Prerequisites
 
-- Complete `notebooks/00_Setup_Lakebase_Project`.
-- Use PostgreSQL 16 or later.
-- Enable Lakebase Search on the lab project before the session.
-- Expect all project computes to restart when Search is enabled. Active connections are dropped, and Search cannot be disabled afterward.
+- Use a Databricks workspace with Lakebase and Lakebase Search available.
+- Each participant must be able to create a Lakebase project and enable Lakebase Search in that workspace.
+- Run the first practical cell before creating any fixture data.
 
-The notebook does not enable Search. It stops if the extensions are unavailable.
+If the participant's exact project does not exist, the cell creates it as PostgreSQL 17. If it
+already exists, the cell reuses it only when the current participant owns it and it carries both
+`purpose=lakebase-workshop` and `lab=retail-search-context`. The cell configures the exact
+`production/primary` endpoint at 1/1 CU with a 600-second scale-to-zero timeout.
 
-Its first executable lab cell prints one readiness report before any fixture data is created. It
-checks the pre-created project, PostgreSQL version, production endpoint, OAuth connection, Search
-preload, extension installability, setup schema, and the exact table and index permissions used by
-the lab. The functional probe rolls back its table, indexes, rows, and extension state.
+The cell enables Lakebase Search when needed. That change cannot be undone. It restarts the
+project's computes and drops active connections, which is why this lab uses a dedicated project.
+After the restart, the cell reconnects with a fresh OAuth credential, creates only the participant
+schema, and runs the exact, ANN, and BM25 readiness checks. The functional probe rolls back its
+table, indexes, rows, and extension state.
+
+Rerun the same cell if provisioning or the Search restart is still in progress. It resumes from
+the current state and safely reuses only the same exact owned project with both tags.
 
 ## What you will see
 

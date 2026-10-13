@@ -60,16 +60,17 @@ class ResetReport:
         return action
 
 
-def planned_actions(ctx: h.Ctx) -> list[tuple[str, str]]:
+def planned_actions(ctx: h.Ctx, only: str | None = None) -> list[tuple[str, str]]:
     """Ordered (kind, target) pairs derived from the manifest.
 
     Manifest order matters for branches: a branch with children cannot be deleted,
-    and lab-recovered is a child of lab-checkpoint-pre-migration.
+    and lab-recovered is a child of lab-checkpoint-pre-migration. The default
+    covers only shared-project labs. A standalone lab must be selected explicitly.
     """
     ph = ctx.placeholders()
     seen: set[tuple[str, str]] = set()
     ordered: list[tuple[str, str]] = []
-    for lab in manifest.RUN_ORDER:
+    for lab in manifest.select_run_labs(only):
         for entry in lab.creates:
             resolved = manifest.resolve(entry, ph)
             kind, _, target = resolved.partition(":")
@@ -311,19 +312,31 @@ def strip_tag(conn, schema: str, spec: str, action: Action, dry_run: bool) -> No
 def main() -> int:
     ap = argparse.ArgumentParser(description="Remove all lab-created state for a repeatable run.")
     ap.add_argument("--profile", help="Databricks CLI profile")
+    ap.add_argument(
+        "--only",
+        help="comma-separated lab ids; required to reset a standalone lab",
+    )
     ap.add_argument("--dry-run", action="store_true", help="report without deleting")
     ap.add_argument("--keep-branches", action="store_true", help="leave lab branches in place")
     ap.add_argument("--keep-uc", action="store_true", help="leave UC tables and synced/online tables")
     args = ap.parse_args()
 
+    try:
+        selected_labs = manifest.select_run_labs(args.only)
+    except ValueError as exc:
+        h.say(f"{h.C.R}{exc}{h.C.X}")
+        return 2
+
     h.require_sdk()
     ctx = h.build_ctx(profile=args.profile)
+    if any(lab.id == "retail_search_context" for lab in selected_labs):
+        ctx = h.with_retail_search_project(ctx)
     mode = "dry run" if args.dry_run else "live"
     h.say(f"{h.C.B}Reset lab state{h.C.X} {h.C.DIM}({mode}){h.C.X}")
     h.say(f"{h.C.DIM}project {ctx.project_id} | schema {ctx.pg_schema}{h.C.X}\n")
 
     report = ResetReport()
-    actions = planned_actions(ctx)
+    actions = planned_actions(ctx, args.only)
     needs_pg = any(kind in ("pg_table", "rows", "tag") for kind, _ in actions)
 
     conn = None

@@ -26,6 +26,13 @@ In your Databricks workspace, open the **`00_Setup_Lakebase_Project`** notebook 
 
 This creates your personal Lakebase database and loads sample data. It takes about 2-3 minutes.
 
+**Store-Aware Retail Search is the exception.** Each participant opens its notebook directly and
+skips the foundation notebook. The first practical cell creates a distinct PostgreSQL 17 project
+when missing, configures `production/primary` at 1/1 CU with a 600-second scale-to-zero timeout, applies
+`purpose=lakebase-workshop` and `lab=retail-search-context`, enables Search, waits and reconnects,
+creates a dedicated participant schema, and validates exact, ANN, and BM25 search. A rerun reuses
+only that participant's exact owned, tagged project. It does not use or seed the foundation project.
+
 You can find the notebook at:
 **Workspace > Users > *your email* > .bundle > lakebase-workshop > dev > files > notebooks**
 
@@ -38,6 +45,7 @@ You're all set. Pick any lab from the list below and dive in. Each lab is self-c
 Before you begin, make sure you have:
 
 - **Your own Databricks workspace** with Lakebase enabled
+- **Permission to create Lakebase projects and enable Lakebase Search** if you are running Store-Aware Retail Search
 - **Python 3.11+** on your computer (`python3 --version`)
 - **Databricks CLI ≥ 0.294.0**, logged in via `databricks auth login` (do this ahead of time)
 - **Node.js 18+** — only needed if you deploy the **Lab Console app**. `setup.sh` installs it for you (Homebrew, nvm, or apt) when you choose option 2. You can also install it ahead of time (`node --version`). Not needed for the notebook labs.
@@ -60,7 +68,7 @@ Every lab is independent. Pick whichever sounds interesting, or follow one of th
 | **Data API** | Call Lakebase over REST (PostgREST) with an OAuth bearer token and row-level security |
 | **Agentic Memory** | Store and query AI agent conversation history |
 | **Lakebase Search** | Add vector + keyword (BM25) search and hybrid ranking to your data |
-| **Store-Aware Retail Search** *(advanced)* | Route exact identifiers directly, then combine typed filters, hybrid ranking, and store assortment in SQL |
+| **Store-Aware Retail Search** *(advanced, standalone)* | Create a dedicated project, then combine exact identifiers, typed filters, hybrid ranking, and store assortment in SQL |
 | **App Deployment** *(capstone)* | Deploy a full-stack web app backed by Lakebase |
 
 ### Data & ML Engineers

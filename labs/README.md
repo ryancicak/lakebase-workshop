@@ -2,7 +2,10 @@
 
 > **Modification notice:** Modified by Ryan Cicak on 2026-10-13 to document a fictional, store-aware retail search lab.
 
-After **`notebooks/00_Setup_Lakebase_Project`**, pick labs by **what you want to learn**. Every lab is independent.
+For almost every lab, start with **`notebooks/00_Setup_Lakebase_Project`**, then pick what you want
+to learn. **Store-Aware Retail Search is the exception:** it is standalone, and its first practical
+cell prepares a distinct per-user project. Participants must be able to create Lakebase projects
+and enable Search.
 
 ## How folders work
 
@@ -29,7 +32,7 @@ Start here → [`labs/<folder>/README.md`](.) → open the file in **What to run
 | 2 | [Data API](data-api/) | [`Data_API.py`](data-api/Data_API.py) | PostgREST, `authenticator` role, OAuth bearer, RLS |
 | 3 | [Agentic Memory](agentic-memory/) | [`Agent_Memory.py`](agentic-memory/Agent_Memory.py) | Session + long-term agent memory |
 | 4 | [Lakebase Search](lakebase-search/) | [`Lakebase_Search.py`](lakebase-search/Lakebase_Search.py) | Vector + BM25 + hybrid RRF |
-| 5 | [Store-Aware Retail Search](retail-search-context/) *(advanced)* | [`Retail_Search_Context.py`](retail-search-context/Retail_Search_Context.py) | Exact identifier routing plus typed filters, hybrid ranking, and store assortment in SQL |
+| 5 | [Store-Aware Retail Search](retail-search-context/) *(advanced, standalone)* | [`Retail_Search_Context.py`](retail-search-context/Retail_Search_Context.py) | Creates its own project, then tests exact identifiers, hybrid ranking, and store assortment in SQL |
 | 6 | [App Deployment](app-deployment/) | [`Deploy_Lab_Console_App.py`](app-deployment/Deploy_Lab_Console_App.py) | Capstone: React + FastAPI Lab Console |
 
 ### Data & ML Engineers
@@ -83,11 +86,12 @@ Numbered for the workshop validator and facilitators. Prefer the **track tables*
 | 11 | [App Deployment](app-deployment/) | `app-deployment/` | Full-stack React + FastAPI app using Lakebase (capstone) |
 | 12 | [Data API](data-api/) | `data-api/` | PostgREST REST access with an `authenticator` role, OAuth bearer tokens, and row-level security |
 | 13 | [Lakebase Search](lakebase-search/) | `lakebase-search/` | Vector (ANN) + keyword (BM25) search and hybrid RRF ranking with `lakebase_vector` / `lakebase_text` |
-| 14 | [Store-Aware Retail Search](retail-search-context/) *(advanced)* | `retail-search-context/` | Exact identifier routing plus typed filters, hybrid ranking, and store-specific assortment in SQL |
+| 14 | [Store-Aware Retail Search](retail-search-context/) *(advanced, standalone)* | `retail-search-context/` | Self-prepared project, exact identifier routing, hybrid ranking, and store-specific assortment in SQL |
 
 ## Path Dependencies
 
-Most paths only require the foundation. Soft recommendations:
+Most paths require only the foundation. Store-Aware Retail Search is a separate standalone path.
+Soft recommendations:
 
 ```
 Foundation (00_Setup)
@@ -106,8 +110,18 @@ Foundation (00_Setup)
     ├── Online Feature Store (requires DBR 16.4 LTS ML or serverless)
     ├── App Deployment (best after exploring other paths)
     ├── Data API (pairs with Data Operations)
-    └── Lakebase Search (enablement is irreversible) ──► Store-Aware Retail Search
+    └── Lakebase Search (enablement is irreversible)
+
+Standalone (no 00_Setup)
+    └── Store-Aware Retail Search (creates a dedicated project and enables Search)
 ```
+
+For that standalone path, the first practical cell creates PostgreSQL 17 when missing, configures
+`production/primary` at 1/1 CU with a 600-second scale-to-zero timeout, applies
+`purpose=lakebase-workshop` and `lab=retail-search-context`, enables Search, waits and reconnects,
+creates a dedicated participant schema, and validates exact, ANN, and BM25 search. Reruns accept
+only the participant's exact owned project with both tags. The foundation project is not used or
+seeded.
 
 ## Connecting & Querying Lakebase
 
@@ -158,7 +172,7 @@ For the full reference, see: [Connect to your database](https://docs.databricks.
 | **Data-focused (60 min)** | Data Operations → Observability |
 | **App builder (60 min)** | Data Operations → Data API → Agentic Memory → App Deployment |
 | **AI search (45 min)** | Agentic Memory → Lakebase Search |
-| **Store-aware retail search (60 min)** | Store-Aware Retail Search (Search enabled; introductory concepts assumed) |
+| **Store-aware retail search (60 min)** | Store-Aware Retail Search (standalone; first cell prepares the project and Search) |
 | **ML serving (45 min)** | Reverse ETL → Online Feature Store |
 | **Lakehouse connectivity (45 min)** | Unity Catalog Access → Reverse ETL → Lakehouse Sync *(Public Preview)* |
 | **Bi-directional sync (45 min)** | Reverse ETL → Lakehouse Sync *(Public Preview)* |

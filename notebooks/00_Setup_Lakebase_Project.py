@@ -5,7 +5,16 @@
 # MAGIC This notebook creates your Lakebase project, waits for the
 # MAGIC endpoint to become active, and seeds a per-user schema with sample data.
 # MAGIC
-# MAGIC **Run this notebook once** before starting any of the workshop labs.
+# MAGIC **Run this notebook once** before starting the standard workshop labs.
+# MAGIC
+# MAGIC > **One exception:** Store-Aware Retail Search is standalone. Do not run this setup notebook
+# MAGIC > for that lab. Each participant runs its notebook directly and must be able to create
+# MAGIC > projects and enable Search. Its first practical cell creates a distinct PostgreSQL 17
+# MAGIC > project when missing, configures `production/primary` at 1/1 CU with a 600-second
+# MAGIC > scale-to-zero timeout, applies `purpose=lakebase-workshop` and `lab=retail-search-context`, enables
+# MAGIC > Search, waits and reconnects, creates a dedicated participant schema, and validates exact,
+# MAGIC > ANN, and BM25 search. A rerun accepts only that participant's exact owned project with both
+# MAGIC > tags. It does not use or seed the foundation project.
 # MAGIC
 # MAGIC ### What gets created
 # MAGIC | Resource | Details |
