@@ -117,7 +117,7 @@ Standalone (no 00_Setup)
 ```
 
 For that standalone path, the first practical cell creates PostgreSQL 17 when missing, configures
-`production/primary` at 1/1 CU with a 600-second scale-to-zero timeout, applies
+`production/primary` at 1/1 CU with a 1-hour scale-to-zero timeout, applies
 `purpose=lakebase-workshop` and `lab=retail-search-context`, enables Search, waits and reconnects,
 creates a dedicated participant schema, and validates exact, ANN, and BM25 search. Reruns accept
 only the participant's exact owned project with both tags. The foundation project is not used or

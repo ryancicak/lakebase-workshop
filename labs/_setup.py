@@ -492,13 +492,13 @@ def prepare_retail_search_lab():
                     "default_endpoint_settings": {
                         "autoscaling_limit_min_cu": 1,
                         "autoscaling_limit_max_cu": 1,
-                        "suspend_timeout_duration": "600s",
+                        "suspend_timeout_duration": "3600s",
                     },
                 },
                 "initial_endpoint_spec": {
                     "autoscaling_limit_min_cu": 1,
                     "autoscaling_limit_max_cu": 1,
-                    "suspend_timeout_duration": "600s",
+                    "suspend_timeout_duration": "3600s",
                     "group": {
                         "min": 1,
                         "max": 1,
@@ -1192,6 +1192,50 @@ def _validate_retail_search_runtime(project_id, pg_schema):
         "The dedicated project is prepared, and no probe objects remain."
     )
     return preflight_conn
+
+
+def connection_was_closed(conn, exc):
+    """True when exc means the server closed conn, not that the SQL failed."""
+    return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError)) and (
+        conn.closed or conn.broken
+    )
+
+
+def reconnect_retail_search_lab(timeout_seconds=180):
+    """Open a fresh connection to the participant's prepared retail Search project.
+
+    When the project scales to zero, it closes open connections. Connecting
+    again wakes the compute. Each attempt mints a fresh OAuth credential.
+    Nothing in the project is created or changed.
+    """
+    endpoint_name = (
+        f"projects/{RETAIL_SEARCH_PROJECT_ID}/branches/production/endpoints/primary"
+    )
+    deadline = time.monotonic() + timeout_seconds
+    last_error = None
+    while time.monotonic() < deadline:
+        endpoint = w.postgres.get_endpoint(name=endpoint_name)
+        credential = w.postgres.generate_database_credential(endpoint=endpoint_name)
+        try:
+            return psycopg.connect(
+                host=endpoint.status.hosts.host,
+                dbname="databricks_postgres",
+                user=user_email,
+                password=credential.token,
+                sslmode="require",
+                connect_timeout=15,
+                row_factory=dict_row,
+                options=f"-c search_path={RETAIL_SEARCH_PG_SCHEMA},public",
+            )
+        except psycopg.OperationalError as exc:
+            last_error = exc
+            time.sleep(5)
+    detail = (str(last_error).splitlines() or [""])[0][:200] if last_error else "timed out"
+    raise RuntimeError(
+        f"Could not reconnect to the retail Search project: {detail}. "
+        "Rerun the Prepare and validate cell."
+    )
+
 
 def _find_seed_sql():
     """Locate bootstrap/seed.sql by walking up from this file or the calling notebook."""

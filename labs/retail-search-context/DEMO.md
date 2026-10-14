@@ -76,7 +76,7 @@ The notebook checks every expected result.
 
 Before those exercises, run the first practical cell. It creates or safely reuses the current
 participant's dedicated PostgreSQL 17 project, configures `production/primary` at 1/1 CU with a
-600-second scale-to-zero timeout, tags the project `purpose=lakebase-workshop` and
+1-hour scale-to-zero timeout, tags the project `purpose=lakebase-workshop` and
 `lab=retail-search-context`, and enables Lakebase Search if needed. It waits for the restart,
 reconnects, creates only the participant schema, and runs a rolled-back exact/ANN/BM25 probe.
 Continue only after it reports `READY`.
@@ -85,6 +85,9 @@ The cell is built to resume. If project creation, Search enablement, or the comp
 in progress, rerun it. It will reuse only the exact project owned by that participant with both lab
 tags. Do not switch to `notebooks/00_Setup_Lakebase_Project` or seed the foundation project. Each
 participant must be able to create projects and enable Search.
+
+Discussion pauses are fine. The project stays on through an idle hour. If it scales to zero anyway,
+the next cell reconnects and retries once, so participants just keep going.
 
 ## 60-minute facilitation flow
 

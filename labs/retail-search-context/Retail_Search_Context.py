@@ -32,6 +32,9 @@
 # MAGIC Enabling Search cannot be undone. It restarts every compute in this dedicated project and drops
 # MAGIC active connections. The preparation cell waits for the restart and reconnects with fresh OAuth.
 # MAGIC
+# MAGIC Pauses are fine. The project stays on through an idle hour, then scales to zero. If that closes
+# MAGIC the connection, the next cell reconnects on its own and prints `Reconnected`.
+# MAGIC
 # MAGIC This 24-row fixture shows SQL behavior only. It does not measure relevance, latency, cost,
 # MAGIC recall, or production scale, and it does not compare search systems.
 
@@ -66,29 +69,42 @@ import math
 import re
 
 
+def run_sql(sql, params=(), fetch=False, finish_transaction=True):
+    """Run one statement, commit it, and return rows when fetch is True.
+
+    The project scales to zero after an idle hour, which closes this
+    connection. If that happened between statements, reconnect and retry once.
+    Any other error rolls back and raises.
+    """
+    global conn
+    for attempt in (1, 2):
+        between_statements = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall() if fetch else None
+            if finish_transaction:
+                conn.commit()
+            return rows
+        except Exception as exc:
+            if attempt == 1 and between_statements and connection_was_closed(conn, exc):
+                print("↻ The project scaled to zero while idle. Reconnecting...")
+                conn = reconnect_retail_search_lab()
+                print("✓ Reconnected")
+                continue
+            if not conn.closed:
+                conn.rollback()
+            raise
+
+
 def execute(sql, params=()):
     """Execute a statement and commit it. Roll back and raise on any error."""
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
+    run_sql(sql, params)
 
 
 def fetch_rows(sql, params=(), finish_transaction=True):
     """Return query rows as dictionaries."""
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            rows = cur.fetchall()
-        if finish_transaction:
-            conn.commit()
-        return rows
-    except Exception:
-        conn.rollback()
-        raise
+    return run_sql(sql, params, fetch=True, finish_transaction=finish_transaction)
 
 # COMMAND ----------
 

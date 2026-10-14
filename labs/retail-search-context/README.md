@@ -14,7 +14,7 @@ Open [`Retail_Search_Context.py`](Retail_Search_Context.py) and run it directly.
 standalone. Do not run `notebooks/00_Setup_Lakebase_Project` first.
 
 The first practical cell creates a distinct project for the current participant when missing. It
-prepares PostgreSQL 17, configures `production/primary` at 1/1 CU with a 600-second scale-to-zero timeout,
+prepares PostgreSQL 17, configures `production/primary` at 1/1 CU with a 1-hour scale-to-zero timeout,
 enables Lakebase Search, waits and reconnects, creates only that participant's lab schema, and
 validates exact, ANN, and BM25 search. It does not use or seed the foundation project.
 
@@ -40,7 +40,7 @@ Plan for about 60 minutes:
 If the participant's exact project does not exist, the cell creates it as PostgreSQL 17. If it
 already exists, the cell reuses it only when the current participant owns it and it carries both
 `purpose=lakebase-workshop` and `lab=retail-search-context`. The cell configures the exact
-`production/primary` endpoint at 1/1 CU with a 600-second scale-to-zero timeout.
+`production/primary` endpoint at 1/1 CU with a 1-hour scale-to-zero timeout.
 
 The cell enables Lakebase Search when needed. That change cannot be undone. It restarts the
 project's computes and drops active connections, which is why this lab uses a dedicated project.
@@ -50,6 +50,9 @@ table, indexes, rows, and extension state.
 
 Rerun the same cell if provisioning or the Search restart is still in progress. It resumes from
 the current state and safely reuses only the same exact owned project with both tags.
+
+Pauses are fine. The project stays on through an idle hour, then scales to zero. If that closes
+the connection, the next cell reconnects on its own, prints `Reconnected`, and retries once.
 
 ## What you will see
 

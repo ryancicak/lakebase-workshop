@@ -161,7 +161,7 @@ This advanced lab is notebook-only, standalone, and does not fit a 20-minute tra
 directly and runs its first practical cell.
 
 That cell creates the participant's distinct PostgreSQL 17 project when missing. It configures
-`production/primary` at 1/1 CU with a 600-second scale-to-zero timeout, applies
+`production/primary` at 1/1 CU with a 1-hour scale-to-zero timeout, applies
 `purpose=lakebase-workshop` and `lab=retail-search-context`, enables Lakebase Search if needed,
 creates only the participant schema, and validates exact, ANN, and BM25 search before fixtures are
 created. It does not use or seed the foundation project.
@@ -571,6 +571,7 @@ does not run it. Validate it directly with
 | `setup.sh` fails at auth | Run `databricks auth login --host <url> --profile lakebase-workshop` manually |
 | Foundation hangs on "Waiting for endpoint" | Endpoint creation can take 2–3 minutes. Let it run. |
 | Store-Aware preparation cannot create the project | The workspace or current participant cannot create a Lakebase project. Ask an admin to verify Lakebase availability and workspace policy, then rerun the same cell. |
+| Store-Aware cell prints `Reconnected` | Expected after an idle hour. The project scaled to zero, and the notebook reconnected and retried on its own. Keep going. |
 | Store-Aware preparation is waiting after enabling Search | Search restarts the project compute and drops the first connection. Let the cell finish, or rerun it to resume and reconnect with a fresh OAuth credential. |
 | "password authentication failed" | Token expired (1h TTL). Re-run the connection cell. |
 | Lab Console shows "Project Not Found" | The user hasn't run `00_Setup_Lakebase_Project` yet. |

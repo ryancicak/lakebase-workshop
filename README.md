@@ -28,7 +28,7 @@ This creates your personal Lakebase database and loads sample data. It takes abo
 
 **Store-Aware Retail Search is the exception.** Each participant opens its notebook directly and
 skips the foundation notebook. The first practical cell creates a distinct PostgreSQL 17 project
-when missing, configures `production/primary` at 1/1 CU with a 600-second scale-to-zero timeout, applies
+when missing, configures `production/primary` at 1/1 CU with a 1-hour scale-to-zero timeout, applies
 `purpose=lakebase-workshop` and `lab=retail-search-context`, enables Search, waits and reconnects,
 creates a dedicated participant schema, and validates exact, ANN, and BM25 search. A rerun reuses
 only that participant's exact owned, tagged project. It does not use or seed the foundation project.

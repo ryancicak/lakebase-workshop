@@ -171,7 +171,7 @@ Then open and **Run All** on the **`00_Setup_Lakebase_Project`** notebook (detai
 
 For Store-Aware Retail Search, each participant skips the foundation notebook and opens the lab
 directly. Its first practical cell creates a distinct PostgreSQL 17 project when missing, sets
-`production/primary` to 1/1 CU with a 600-second scale-to-zero timeout, applies
+`production/primary` to 1/1 CU with a 1-hour scale-to-zero timeout, applies
 `purpose=lakebase-workshop` and `lab=retail-search-context`, enables Search, waits and reconnects,
 creates a dedicated participant schema, and validates exact, ANN, and BM25 search. The participant
 must be able to create projects and enable Search. On rerun, the cell accepts only the exact project
