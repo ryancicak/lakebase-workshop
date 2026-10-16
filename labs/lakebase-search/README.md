@@ -10,13 +10,14 @@ Add **vector (semantic)**, **keyword (BM25)**, and **hybrid** search directly in
 
 ## Prerequisites
 
-- A Lakebase project — your workshop project from **`00_Setup_Lakebase_Project`** by default, or any existing project via the notebook's **`project_id`** widget. This lab doesn't depend on any other workshop notebook.
-- **Lakebase Search enabled** for that project (Beta) — a workspace admin enables Beta access from the **Previews** page; then enable it in the project **Settings → Lakebase Search**
-- **Postgres 16+**
+None. Open the notebook and **Run all**. It doesn't depend on any other workshop notebook, so you don't need to run `00_Setup_Lakebase_Project` first.
+
+- **Project:** the notebook uses your workshop project, `lakebase-lab-<you>`. If it doesn't exist yet, the notebook creates it (PostgreSQL 17, 1 CU, scales to zero after an idle hour) and turns Lakebase Search on. Expect a few minutes the first time; reruns reuse it.
+- **Another project:** set the notebook's **`project_id`** widget. That project needs **Lakebase Search enabled** in its **Settings → Lakebase Search** (Postgres 16+). The notebook only turns Search on for a project it created itself.
 
 ## ⚠️ Enablement is irreversible
 
-Enabling Lakebase Search **restarts all computes in the project**, makes the extensions installable, and **cannot be turned off**. The notebook never enables Search itself: it checks first and, if Search is off, stops with a link to the setting, so it's safe to run before enabling.
+Enabling Lakebase Search **restarts all computes in the project**, makes the extensions installable, and **cannot be turned off**. That's why the notebook turns Search on only for a project it created itself, tagged `lab=lakebase-search`. On any other project it checks first and, if Search is off, stops with a link to the setting, so it's safe to run there before enabling.
 
 ## Key Concepts
 
