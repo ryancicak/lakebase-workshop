@@ -292,13 +292,9 @@ LABS: tuple[Lab, ...] = (
             "installed — Search is ready",
             "✓ search_documents built: 5 rows",
         ),
-        # Without these the notebook prints a diagnosis and runs every later cell as
-        # a no-op, finishing green while exercising none of Lakebase Search.
-        forbidden=(
-            "✗ Could not install the Lakebase Search extensions.",
-            "Skipped — enable Lakebase Search first",
-            REPAIR_WARNING,
-        ),
+        # Self-contained (no `_setup`), and it raises when Search is off rather than
+        # no-op'ing later cells, so a disabled project fails the run on its own.
+        forbidden=(REPAIR_WARNING,),
         checks=(
             sql(
                 "lakebase_vector + lakebase_text installed",
