@@ -304,8 +304,10 @@ LABS: tuple[Lab, ...] = (
             sql("search corpus built", "SELECT count(*) FROM {schema}.search_documents", "== 5"),
         ),
         creates=("pg_table:search_documents",),
-        notes="Requires Lakebase Search enabled on the project (UI, irreversible). "
-        "Drops and rebuilds its own table, so it is naturally repeatable.",
+        notes="Setup runs first, so the project already exists and the lab runs only when "
+        "Search is already on (gate). The notebook turns Search on by itself only for a project "
+        "it created (tagged lab=lakebase-search), which never happens under the harness. Drops "
+        "and rebuilds its own table, so it is naturally repeatable.",
     ),
     # ------------------------------------------------------------------ #
     Lab(

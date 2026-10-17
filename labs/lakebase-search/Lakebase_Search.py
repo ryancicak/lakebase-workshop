@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # Lakebase Search — Vector, Keyword & Hybrid
 # MAGIC
-# MAGIC **Path:** Lakebase Search &nbsp;|&nbsp; **Prerequisite:** a Lakebase project with Lakebase Search enabled
+# MAGIC **Path:** Lakebase Search &nbsp;|&nbsp; **Prerequisite:** none — the notebook creates its Lakebase project if needed
 # MAGIC
 # MAGIC **Lakebase feature:** Lakebase Search *(Beta)* — hybrid vector + keyword search inside Postgres
 # MAGIC
@@ -14,10 +14,11 @@
 # MAGIC 5. Combine both into a single ranking with **hybrid search (Reciprocal Rank Fusion)**
 # MAGIC 6. *(Optional)* Add semantic recall to the Agentic Memory lab's `agent_memory_store`
 # MAGIC
-# MAGIC **This lab runs on its own** — no other workshop notebook is required. By default it uses your
-# MAGIC workshop project (`lakebase-lab-<you>` from `00_Setup_Lakebase_Project`); set the **`project_id`**
-# MAGIC widget to run it against any project that has Lakebase Search enabled. Its table goes in your own
-# MAGIC `lakebase_lab_<you>` schema, and table references use unqualified names via `search_path`.
+# MAGIC **This lab runs on its own** — no other workshop notebook is required. It uses your workshop
+# MAGIC project, `lakebase-lab-<you>`, and if that doesn't exist yet it creates it and turns Lakebase
+# MAGIC Search on. Set the **`project_id`** widget to run it against another project instead. Its table
+# MAGIC goes in your own `lakebase_lab_<you>` schema, and table references use unqualified names via
+# MAGIC `search_path`.
 # MAGIC
 # MAGIC **Docs:** [Lakebase Search](https://docs.databricks.com/aws/en/oltp/projects/lakebase-search) |
 # MAGIC [lakebase_vector](https://docs.databricks.com/aws/en/oltp/projects/lakebase-vector) |
@@ -37,10 +38,11 @@
 # MAGIC It also requires **Beta access** for your project (a workspace admin enables it from the
 # MAGIC **Previews** page; contact your Databricks account team to request it). Requirements: **Postgres 16+**.
 # MAGIC
-# MAGIC **Enable it once, in the UI:** Lakebase project → **Settings** → **Lakebase Search** → **Enable**.
+# MAGIC **To enable it yourself in the UI:** Lakebase project → **Settings** → **Lakebase Search** → **Enable**.
 # MAGIC
-# MAGIC > Because enabling restarts compute and is permanent, this notebook never enables Search itself.
-# MAGIC > It checks first and, if Search is off, stops with a link to the setting.
+# MAGIC > Because enabling restarts compute and is permanent, this notebook turns Search on only for a
+# MAGIC > project it created itself (tagged `lab=lakebase-search`). On any other project it checks first
+# MAGIC > and, if Search is off, stops with a link to the setting.
 
 # COMMAND ----------
 
@@ -70,10 +72,12 @@ dbutils.library.restartPython()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Choose your project
+# MAGIC ## Set up your project
 # MAGIC
 # MAGIC The **`project_id`** and **`branch`** widgets at the top of the notebook pick where the lab runs.
-# MAGIC The defaults point at your workshop project's `production` branch.
+# MAGIC The default is your workshop project's `production` branch. If that project doesn't exist yet,
+# MAGIC the next cell creates it (PostgreSQL 17, 1 CU, scales to zero after an idle hour). That takes a
+# MAGIC few minutes the first time; later runs reuse it.
 
 # COMMAND ----------
 
@@ -83,7 +87,7 @@ import time
 import psycopg
 from psycopg.rows import dict_row
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.errors import NotFound
+from databricks.sdk.errors import DatabricksError, NotFound, ResourceConflict
 
 w = WorkspaceClient()
 user_email = w.current_user.me().user_name
@@ -94,20 +98,74 @@ dbutils.widgets.text("branch", "production", "Branch")
 PROJECT_ID = dbutils.widgets.get("project_id").strip()
 BRANCH = dbutils.widgets.get("branch").strip() or "production"
 PG_SCHEMA = f"lakebase_lab_{_user.replace('-', '_')}"
+# Projects this notebook creates carry this tag, and they are the only ones it will turn Lakebase
+# Search on for, because enabling Search is permanent and restarts the project's computes.
+LAB_TAG = {"key": "lab", "value": "lakebase-search"}
 
+
+def postgres_api(method, path, **kwargs):
+    """Call the Lakebase REST API directly; the SDK has no method for turning Search on."""
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if getattr(w.config, "workspace_id", None):
+        headers["X-Databricks-Workspace-Id"] = str(w.config.workspace_id)
+    return w.api_client.do(method, f"/api/2.0/postgres/{path}", headers=headers, **kwargs)
+
+
+def wait_for_operation(name, label, timeout_s=900):
+    """Poll a long-running Lakebase operation until it finishes."""
+    deadline = time.time() + timeout_s
+    op = w.postgres.get_operation(name=name)
+    while not op.done:
+        if time.time() > deadline:
+            raise TimeoutError(f"{label} is still running after {timeout_s // 60} minutes. Check the "
+                               "project in the Lakebase UI, then re-run this cell.")
+        time.sleep(5)
+        op = w.postgres.get_operation(name=name)
+    if op.error:
+        raise RuntimeError(f"{label} failed: {getattr(op.error, 'message', None) or op.error}")
+
+
+# The project: create it on the first run, reuse it after that.
 try:
-    _endpoints = list(w.postgres.list_endpoints(parent=f"projects/{PROJECT_ID}/branches/{BRANCH}"))
+    postgres_api("GET", f"projects/{PROJECT_ID}")
+    _new_project = False
 except NotFound:
-    _endpoints = []
-# A branch can also carry read replicas; the DDL below needs its read-write endpoint.
-_rw = [e for e in _endpoints if "READ_WRITE" in str(getattr(e.status, "endpoint_type", ""))]
-if not _rw:
-    raise RuntimeError(
-        f"No read-write endpoint for branch '{BRANCH}' of Lakebase project '{PROJECT_ID}'. "
-        "Run 00_Setup_Lakebase_Project to create your workshop project, or set the project_id "
-        "widget to an existing project that has Lakebase Search enabled."
-    )
-endpoint = w.postgres.get_endpoint(name=_rw[0].name)
+    print(f"Creating Lakebase project {PROJECT_ID}. This takes a few minutes...")
+    _compute = {"autoscaling_limit_min_cu": 1, "autoscaling_limit_max_cu": 1, "suspend_timeout_duration": "3600s"}
+    _op = postgres_api("POST", "projects", query={"project_id": PROJECT_ID}, body={
+        "spec": {
+            "display_name": f"Lakebase Workshop: {PROJECT_ID}",
+            "pg_version": 17,
+            "custom_tags": [{"key": "purpose", "value": "lakebase-workshop"}, LAB_TAG],
+            "default_endpoint_settings": _compute,
+        },
+        "initial_endpoint_spec": {**_compute, "group": {"min": 1, "max": 1, "enable_readable_secondaries": False}},
+    })
+    wait_for_operation(_op["name"], "Creating the project", timeout_s=600)
+    _new_project = True
+    print(f"✓ Created project {PROJECT_ID}")
+
+# Its read-write compute. A branch can also carry read replicas, and the DDL below needs read-write.
+# IDLE means the compute scaled to zero, which is fine: connecting wakes it.
+deadline = time.time() + 600
+while True:
+    try:
+        _endpoints = list(w.postgres.list_endpoints(parent=f"projects/{PROJECT_ID}/branches/{BRANCH}"))
+    except NotFound:
+        if not _new_project:
+            raise RuntimeError(f"Project '{PROJECT_ID}' has no branch '{BRANCH}'. Fix the branch widget, "
+                               "then re-run this cell.") from None
+        _endpoints = []  # a brand-new project's branch takes a moment to appear
+    _rw = [e for e in _endpoints if "READ_WRITE" in str(getattr(e.status, "endpoint_type", ""))]
+    if _rw and any(s in str(_rw[0].status.current_state) for s in ("ACTIVE", "IDLE", "DEGRADED")):
+        endpoint = _rw[0]
+        break
+    if _endpoints and not _rw and not _new_project:
+        raise RuntimeError(f"Branch '{BRANCH}' of project '{PROJECT_ID}' has no read-write endpoint.")
+    if time.time() > deadline:
+        raise TimeoutError(f"The compute for branch '{BRANCH}' of '{PROJECT_ID}' isn't up after 10 minutes. "
+                           "Check it in the Lakebase UI, then re-run this cell.")
+    time.sleep(5)
 
 
 def connect():
@@ -130,13 +188,23 @@ def connect():
 
 
 def run(sql, params=None, show=True, label=None):
-    """Execute SQL and (optionally) print the returned rows."""
-    with conn.cursor() as cur:
-        cur.execute(sql, params or ())
-        conn.commit()
-        if cur.description is None:
-            return []
-        rows = cur.fetchall()
+    """Execute SQL and (optionally) print the returned rows.
+
+    Reconnects and retries once if the connection dropped, which happens when the compute scales
+    to zero during a pause or restarts after Search is turned on."""
+    global conn
+    for attempt in range(2):
+        if conn.closed:
+            conn = connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params or ())
+                conn.commit()
+                rows = cur.fetchall() if cur.description else []
+            break
+        except psycopg.OperationalError:
+            if attempt or not conn.closed:  # a failed statement, not a dropped connection
+                raise
     if show:
         if label:
             print(f"— {label} —")
@@ -152,25 +220,67 @@ print(f"✓ Connected to {BRANCH} branch of {PROJECT_ID} (schema {PG_SCHEMA})")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1. Install the search extensions
+# MAGIC ## 1. Turn on Lakebase Search and install the extensions
 # MAGIC
-# MAGIC After Lakebase Search is enabled for your project, install the two extensions.
-# MAGIC `CASCADE` on `lakebase_vector` also installs `pgvector` as a dependency. Both go into
-# MAGIC `public`, so the vector type and search operators resolve from any schema in the database.
+# MAGIC Lakebase Search is a project setting. If it's off on a project this notebook created, the cell
+# MAGIC below turns it on through the Lakebase API (the same switch as **Settings → Lakebase Search**)
+# MAGIC and waits for the compute to restart. On any other project it stops with a link to that setting.
+# MAGIC
+# MAGIC Then it installs the two extensions. `CASCADE` on `lakebase_vector` also installs `pgvector` as a
+# MAGIC dependency. Both go into `public`, so the vector type and search operators resolve from any
+# MAGIC schema in the database.
 
 # COMMAND ----------
 
-# Both extensions ship on every project, but CREATE EXTENSION only works once enabling
-# Search has added them to shared_preload_libraries, so check that rather than guess.
-_preload = run("SHOW shared_preload_libraries;", show=False)[0]["shared_preload_libraries"]
-if not {"lakebase_vector", "lakebase_text"} <= {lib.strip() for lib in _preload.split(",")}:
-    _uid = getattr(w.postgres.get_project(name=f"projects/{PROJECT_ID}"), "uid", None) or PROJECT_ID
-    raise RuntimeError(
-        f"Lakebase Search is not enabled on project '{PROJECT_ID}'. Enable it at "
-        f"{w.config.host.rstrip('/')}/lakebase/projects/{_uid} → Settings → Lakebase Search "
-        "(irreversible; restarts the project's computes), then re-run this notebook — or set "
-        "the project_id widget to a project where it is already enabled."
-    )
+def search_enabled():
+    """Both extensions ship on every project, but CREATE EXTENSION only works once turning
+    Search on has added them to shared_preload_libraries."""
+    preload = run("SHOW shared_preload_libraries;", show=False)[0]["shared_preload_libraries"]
+    return {"lakebase_vector", "lakebase_text"} <= {lib.strip() for lib in preload.split(",")}
+
+
+if not search_enabled():
+    _project = postgres_api("GET", f"projects/{PROJECT_ID}")
+    _status = _project.get("status") or {}
+    _settings_url = f"{w.config.host.rstrip('/')}/lakebase/projects/{_project.get('uid') or PROJECT_ID}"
+    _ours = (LAB_TAG in (_status.get("custom_tags") or [])
+             and str(_status.get("owner", "")).casefold() == user_email.casefold())
+    if not _ours:
+        raise RuntimeError(
+            f"Lakebase Search is not enabled on project '{PROJECT_ID}', and this notebook only turns it "
+            f"on for projects it created. Enable it at {_settings_url} → Settings → Lakebase Search "
+            "(irreversible; restarts the project's computes), then re-run this cell. Or set the "
+            "project_id widget to a new name, and this notebook will create that project with Search on."
+        )
+
+    print(f"Turning on Lakebase Search for {PROJECT_ID}. This is permanent and restarts its compute "
+          "(a few minutes)...")
+    conn.close()
+    try:
+        _op = postgres_api("POST", f"projects/{PROJECT_ID}/search-extensions", body={})
+    except ResourceConflict:
+        _op = None  # an earlier run already started it; wait for the restart below
+    except DatabricksError as e:
+        raise RuntimeError(
+            f"Couldn't turn on Lakebase Search ({e}). Check that Lakebase Search is available in this "
+            f"workspace, or enable it at {_settings_url} → Settings → Lakebase Search, then re-run this cell."
+        ) from e
+    if _op:
+        wait_for_operation(_op["name"], "Turning on Lakebase Search")
+
+    # The restart drops every connection; the libraries are loaded once the compute is back up.
+    deadline = time.time() + 600
+    while True:
+        try:
+            if search_enabled():  # run() reconnects with a fresh token
+                break
+            conn.close()
+        except psycopg.OperationalError:
+            pass
+        if time.time() > deadline:
+            raise TimeoutError("Lakebase Search is still starting up. Wait a minute, then re-run this cell.")
+        time.sleep(10)
+    print(f"✓ Lakebase Search turned on for {PROJECT_ID}")
 
 run("CREATE EXTENSION IF NOT EXISTS lakebase_vector WITH SCHEMA public CASCADE;", show=False)  # ANN vector search (+ pgvector)
 run("CREATE EXTENSION IF NOT EXISTS lakebase_text WITH SCHEMA public;", show=False)            # BM25 full-text search
