@@ -1,11 +1,12 @@
 # Lab Paths
 
-> **Modification notice:** Modified by Ryan Cicak on 2026-10-13 to document a fictional, store-aware retail search lab.
+> **Modification notice:** Modified by Ryan Cicak on 2026-10-13 to document a fictional, store-aware retail search lab, and on 2026-11-05 to add the Branch per Change lab and the Session Preflight.
 
 For almost every lab, start with **`notebooks/00_Setup_Lakebase_Project`**, then pick what you want
-to learn. **Store-Aware Retail Search is the exception:** it is standalone, and its first practical
-cell prepares a distinct per-user project. Participants must be able to create Lakebase projects
-and enable Search.
+to learn. **Store-Aware Retail Search and Branch per Change are the exceptions:** each is standalone, and its first
+practical cell prepares a distinct per-user project. Participants must be able to create Lakebase projects (and,
+for Search, enable Search). Before a session, each participant can run the [Session Preflight](session-preflight/)
+to check the workspace and install both labs.
 
 ## How folders work
 
@@ -64,6 +65,7 @@ Start here → [`labs/<folder>/README.md`](.) → open the file in **What to run
 | 2 | [Authentication, Security & Compliance](authentication/) | [`Authentication_and_Permissions.py`](authentication/Authentication_and_Permissions.py) | OAuth, roles, encryption, Private Link |
 | 3 | [Backup & Recovery](backup-recovery/) | [`Backup_and_Recovery.py`](backup-recovery/Backup_and_Recovery.py) | Checkpoints, snapshots, PITR |
 | 4 | [Observability](observability/) | [`Observability_and_Monitoring.py`](observability/Observability_and_Monitoring.py) | `pg_stat`, indexes, monitoring |
+| 5 | [Branch per Change](branch-per-change/) *(advanced, standalone)* | [`Branch_Per_Change.py`](branch-per-change/Branch_Per_Change.py) | Creates its own project, branches a two-million-row table, proves an index change on the branch, promotes it, and repairs an agent's bad DELETE with point-in-time restore |
 
 ---
 
@@ -87,10 +89,12 @@ Numbered for the workshop validator and facilitators. Prefer the **track tables*
 | 12 | [Data API](data-api/) | `data-api/` | PostgREST REST access with an `authenticator` role, OAuth bearer tokens, and row-level security |
 | 13 | [Lakebase Search](lakebase-search/) | `lakebase-search/` | Vector (ANN) + keyword (BM25) search and hybrid RRF ranking with `lakebase_vector` / `lakebase_text` |
 | 14 | [Store-Aware Retail Search](retail-search-context/) *(advanced, standalone)* | `retail-search-context/` | Self-prepared project, exact identifier routing, hybrid ranking, and store-specific assortment in SQL |
+| 15 | [Branch per Change](branch-per-change/) *(advanced, standalone)* | `branch-per-change/` | A branch per change, promotion by replaying the statement, schema diff, and point-in-time repair of production |
+| 16 | [Session Preflight](session-preflight/) *(before a session)* | `session-preflight/` | Checks a workspace, installs the labs, and proves permissions with one throwaway project |
 
 ## Path Dependencies
 
-Most paths require only the foundation. Store-Aware Retail Search is a separate standalone path.
+Most paths require only the foundation. Store-Aware Retail Search and Branch per Change are separate standalone paths.
 Soft recommendations:
 
 ```

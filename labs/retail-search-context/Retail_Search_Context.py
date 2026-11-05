@@ -40,7 +40,23 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install "databricks-sdk>=0.81.0" "psycopg[binary]>=3.0" "protobuf>=5.29.5,<6" --quiet
+# Install only what this notebook needs, and keep protobuf on the major version this environment already ships.
+# On some serverless environment versions protobuf is a core package: changing its major version stops the Python
+# restart in the next cell ("Kernel exited"). Staying on the same major version is always safe.
+import importlib.metadata as _md
+_reqs = ["databricks-sdk>=0.81.0", "psycopg[binary]>=3.0"]
+try:
+    _pb = _md.version("protobuf")
+    _reqs.append(f"protobuf>={_pb},<{int(_pb.split('.')[0]) + 1}")
+except _md.PackageNotFoundError:
+    pass
+with open("/tmp/lakebase_lab_requirements.txt", "w") as _f:
+    _f.write("\n".join(_reqs) + "\n")
+print("Installing: " + ", ".join(_reqs))
+
+# COMMAND ----------
+
+# MAGIC %pip install --quiet -r /tmp/lakebase_lab_requirements.txt
 
 # COMMAND ----------
 
