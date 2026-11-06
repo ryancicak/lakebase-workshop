@@ -90,6 +90,7 @@ dbutils.library.restartPython()
 import base64
 import hashlib
 import json
+import re
 import secrets
 import time
 import urllib.parse
@@ -101,15 +102,15 @@ from databricks.sdk.service.compute import Environment
 from databricks.sdk.service.jobs import JobEnvironment, JobRunAs, NotebookTask, SubmitTask
 from databricks.sdk.service.workspace import ImportFormat, Language
 
-KIT_VERSION = "2026-11-06a"
-RELEASE_TAG = "retail-session-2026-11-06a"
+KIT_VERSION = "2026-11-06b"
+RELEASE_TAG = "retail-session-2026-11-06b"
 SESSION_ENVIRONMENT = "6"
 SOURCE_BASE = f"https://raw.githubusercontent.com/ryancicak/lakebase-workshop/{RELEASE_TAG}/"
 # These fingerprints are filled from the exact release files before packaging.
 SOURCES = {
     'labs/_setup.py': '5d66c015e16c7082f5f1408b29be53ec8ad8f796c08669b7eeb0d2c98182947d',
-    'labs/branch-per-change/Branch_Per_Change.py': 'e14f8bccf7475eae5f1392dc1ba617b84fa579ca379c79bc61d85b4cee0e8adf',
-    'labs/retail-search-context/Retail_Search_Context.py': 'd05c8c9c0fa582deb315d73305dff60ee5faa54b67b358dfe85d398fb8c2f42f',
+    'labs/branch-per-change/Branch_Per_Change.py': 'aad95c90d19d049e1c94945bd832fe877613ce1c0d79630eec044433b70b5954',
+    'labs/retail-search-context/Retail_Search_Context.py': '406389c6a4a999fac8956d72e2e631734f8467798b903d8a4bb8443622066adc',
 }
 LABS = {
     "branch": {
@@ -127,6 +128,24 @@ LABS = {
 
 def enum_text(value):
     return str(getattr(value, "value", value) or "").rsplit(".", 1)[-1]
+
+
+def rehearsal_project_suffix(user):
+    """Optional job-only isolation for instructor validation; participants leave it unset."""
+    try:
+        suffix = dbutils.widgets.get("project_suffix")
+    except Exception:
+        return ""
+    if suffix == "":
+        return ""
+    if not isinstance(suffix, str) or not re.fullmatch(r"[a-z0-9]{1,8}", suffix):
+        raise RuntimeError("Rehearsal project_suffix must contain 1 to 8 lowercase letters or digits.")
+    slug = re.sub(r"-+", "-", re.sub(r"[^a-z0-9-]", "-", user.split("@")[0].lower())).strip("-")
+    search_slug = slug[:23].rstrip("-") or "user"
+    names = (f"lakebase-lab-{slug}-{suffix}", f"lakebase-retail-search-{search_slug}-{'0' * 16}-{suffix}")
+    if any(len(name) > 63 for name in names):
+        raise RuntimeError("Rehearsal project_suffix makes this identity's project name too long.")
+    return suffix
 
 
 def download_sources():
@@ -204,13 +223,15 @@ def validate_receipt(text, lab, user, run_id):
     return receipt
 
 
-def run_lab(w, lab, path, user, run_id, state, timeout_seconds=2400):
+def run_lab(w, lab, path, user, run_id, state, timeout_seconds=2400, project_suffix=""):
     """Submit as this participant, pin environment 6, and require task completion evidence."""
     label = LABS[lab]["label"]
     parameters = {
         "prepare_for_session": "true", "release_version": KIT_VERSION,
         "validation_run_id": run_id, "session_environment": SESSION_ENVIRONMENT,
     }
+    if project_suffix:
+        parameters["project_suffix"] = project_suffix
     task = SubmitTask(
         task_key=lab, environment_key="session",
         notebook_task=NotebookTask(notebook_path=path, base_parameters=parameters),
@@ -260,6 +281,8 @@ def run_lab(w, lab, path, user, run_id, state, timeout_seconds=2400):
             if output.error or notebook_output is None or notebook_output.truncated:
                 raise RuntimeError(f"{label} has missing or incomplete result evidence. Open {link}")
             receipt = validate_receipt(notebook_output.result, lab, user, run_id)
+            if project_suffix and not receipt["project_id"].endswith("-" + project_suffix):
+                raise RuntimeError(f"{label} did not use the isolated rehearsal project.")
             print(f"✓ {label}: all exercises passed; starting data verified.")
             return receipt, link
         time.sleep(10)
@@ -279,6 +302,7 @@ def prepare_session():
     user = w.current_user.me().user_name
     if not user or "/" in user:
         raise RuntimeError("Couldn't identify a participant user. Run this signed in with your own account.")
+    project_suffix = rehearsal_project_suffix(user)
     run_id = secrets.token_hex(8)
     home = f"/Users/{user}/lakebase-session-labs"
     lock_path = home + "/READY_in_progress"
@@ -309,7 +333,7 @@ def prepare_session():
         for lab in LABS:
             print(f"Installed {LABS[lab]['label']}: {links[lab]}")
         for lab in LABS:
-            receipts[lab], run_links[lab] = run_lab(w, lab, paths[lab], user, run_id, state)
+            receipts[lab], run_links[lab] = run_lab(w, lab, paths[lab], user, run_id, state, project_suffix=project_suffix)
         if set(receipts) != set(LABS):
             raise RuntimeError("Both lab checks must complete before READY.")
         result = {

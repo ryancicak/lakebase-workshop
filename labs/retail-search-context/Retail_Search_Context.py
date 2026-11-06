@@ -27,7 +27,7 @@
 # MAGIC
 # MAGIC These examples show query behavior. They don't measure production search quality, speed, or cost.
 # MAGIC
-# MAGIC > Added by Ryan Cicak on 2026-10-13. Presentation and advance-setup checks revised 2026-11-06. Release 2026-11-06a.
+# MAGIC > Added by Ryan Cicak on 2026-10-13. Presentation and advance-setup checks revised 2026-11-06. Release 2026-11-06b.
 
 # COMMAND ----------
 
@@ -122,7 +122,7 @@ dbutils.library.restartPython()
 # COMMAND ----------
 
 # DBTITLE 1,Create or reopen your Search project
-LAB_RELEASE_VERSION = "2026-11-06a"
+LAB_RELEASE_VERSION = "2026-11-06b"
 
 
 def _session_parameter(name, default=""):

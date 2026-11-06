@@ -133,6 +133,9 @@ class Jobs:
         lab = task.task_key
         receipt = valid_receipt(self.n, lab, submission['run_as'].user_name,
                                 task.notebook_task.base_parameters['validation_run_id'])
+        suffix = task.notebook_task.base_parameters.get('project_suffix', '')
+        if suffix:
+            receipt['project_id'] += '-' + suffix
         receipt.update(self.world.get('receipt_changes', {}).get(lab, {}))
         text = json.dumps(receipt)
         if self.world.get('bad_json') == lab:
@@ -239,6 +242,42 @@ class ReadyTests(unittest.TestCase):
 
     def test_download_mismatch_imports_nothing(self):
         self.world['bad_download'] = list(self.files)[-1]
+        self.prepare(should_fail=True)
+        self.assertEqual(self.workspace.imports, [])
+        self.assertEqual(self.jobs.submissions, [])
+
+    def test_rehearsal_suffix_default_absent_leaves_participant_parameters_unchanged(self):
+        self.prepare()
+        for submission in self.jobs.submissions:
+            self.assertNotIn('project_suffix', submission['tasks'][0].notebook_task.base_parameters)
+
+    def test_rehearsal_suffix_passed_to_both_labs(self):
+        self.n['dbutils'] = obj(widgets=obj(get=lambda name: 'test1106'))
+        result, _, _ = self.prepare()
+        for submission in self.jobs.submissions:
+            self.assertEqual(submission['tasks'][0].notebook_task.base_parameters['project_suffix'], 'test1106')
+        self.assertTrue(all(receipt['project_id'].endswith('-test1106') for receipt in result['labs'].values()))
+
+    def test_invalid_rehearsal_suffix_fails_before_mutations(self):
+        for suffix in ('../other', 'TEST', ' test', 'a' * 9, None, 1, 'a-b'):
+            with self.subTest(suffix=suffix):
+                self.setUp()
+                self.n['dbutils'] = obj(widgets=obj(get=lambda name: suffix))
+                self.prepare(should_fail=True)
+                self.assertEqual(self.downloads, [])
+                self.assertEqual(self.workspace.mkdirs_calls, [])
+                self.assertEqual(self.workspace.imports, [])
+                self.assertEqual(self.jobs.submissions, [])
+
+    def test_rehearsal_suffix_receipt_must_identify_isolated_project(self):
+        self.n['dbutils'] = obj(widgets=obj(get=lambda name: 'test1106'))
+        self.world['receipt_changes'] = {'branch': {'project_id': 'original-project'}}
+        self.prepare(should_fail=True)
+        self.assertEqual(len(self.jobs.submissions), 1)
+
+    def test_rehearsal_suffix_rejects_overlong_project_before_mutations(self):
+        self.n['dbutils'] = obj(widgets=obj(get=lambda name: 'test1106'))
+        self.client.current_user.me = lambda: obj(user_name='a' * 23 + '@example.test')
         self.prepare(should_fail=True)
         self.assertEqual(self.workspace.imports, [])
         self.assertEqual(self.jobs.submissions, [])
