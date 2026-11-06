@@ -1,48 +1,52 @@
 # Databricks notebook source
+
 # MAGIC %md
-# MAGIC # Store-Aware Retail Search
+# MAGIC # Search products with store inventory
 # MAGIC
-# MAGIC > **Modification notice:** Added by Ryan Cicak on 2026-10-13 as a fictional, store-aware retail search lab.
+# MAGIC A customer wants a driver for long deck screws. We'll find tools that fit, then check what's in stock at their store. We'll change the stock and see how the results change.
 # MAGIC
-# MAGIC **Path:** Store-Aware Retail Search &nbsp;|&nbsp; **Standalone lab**
+# MAGIC We'll use two fictional stores and 24 made-up products. Each result includes the store's stock, price, and aisle.
 # MAGIC
-# MAGIC This lab tests one thing:
+# MAGIC The customer asks: "I need a 20V impact driver for long deck screws. Tool only. Not EmberVale."
 # MAGIC
-# MAGIC > Can the same query return a different result by store, and can we explain why in SQL?
+# MAGIC We supply the request fields and small example vectors. This notebook doesn't interpret the sentence or call an AI model. We're looking at how search and inventory work together in SQL.
 # MAGIC
-# MAGIC You will:
+# MAGIC | Step | What we'll do | Minutes |
+# MAGIC |---|---|---|
+# MAGIC | 0 | Connect to our own lab project | 5 |
+# MAGIC | 1 | Load the products and store inventory | 5 |
+# MAGIC | 2 | Look up a SKU and a barcode | 5 |
+# MAGIC | 3 | Set the customer's requirements | 5 |
+# MAGIC | 4 | Compare vector and keyword results | 12 |
+# MAGIC | 5 | Recommend only the store's regular lineup | 10 |
+# MAGIC | 6 | Try a request nothing can satisfy | 3 |
+# MAGIC | 7 | Restock a product and search again | 8 |
+# MAGIC | 8 | Check the results and discuss a real test | 7 |
 # MAGIC
-# MAGIC 1. Look up an exact SKU or UPC.
-# MAGIC 2. Run one query through vector and BM25 search.
-# MAGIC 3. Apply product and store filters before ranking.
-# MAGIC 4. Compare the same query at two stores.
-# MAGIC 5. Restock one product and rerun without changing the query.
+# MAGIC Run one cell at a time on **Serverless**. Step 4b is optional if we need five minutes back. Everything else stays in order.
 # MAGIC
-# MAGIC All products, brands, stores, identifiers, prices, quantities, and aisles are fictional.
+# MAGIC These examples show query behavior. They don't measure production search quality, speed, or cost.
+# MAGIC
+# MAGIC > Added by Ryan Cicak on 2026-10-13. Presentation and advance-setup checks revised 2026-11-06. Release 2026-11-06a.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Before you run
+# MAGIC ## 0. Connect to our lab project
+# MAGIC ### Choose the library versions
 # MAGIC
-# MAGIC Run this notebook directly. The first practical cell creates or safely reuses your dedicated
-# MAGIC PostgreSQL 17 project, enables Lakebase Search if needed, creates only your participant schema,
-# MAGIC and validates every operation used below. You do not need to run `00_Setup_Lakebase_Project`.
+# MAGIC **What:** we're preparing the library list for this notebook.
 # MAGIC
-# MAGIC Enabling Search cannot be undone. It restarts every compute in this dedicated project and drops
-# MAGIC active connections. The preparation cell waits for the restart and reconnects with fresh OAuth.
+# MAGIC **Why:** it needs a Lakebase client and a Postgres driver. We keep the environment's protobuf major version to avoid the restart problem caused by replacing it.
 # MAGIC
-# MAGIC Pauses are fine. The project stays on through an idle hour, then scales to zero. If that closes
-# MAGIC the connection, the next cell reconnects on its own and prints `Reconnected`.
-# MAGIC
-# MAGIC This 24-row fixture shows SQL behavior only. It does not measure relevance, latency, cost,
-# MAGIC recall, or production scale, and it does not compare search systems.
+# MAGIC **Look for:** `Installing:` followed by the library list. The next cell installs it.
 
 # COMMAND ----------
 
-# Install only what this notebook needs, and keep protobuf on the major version this environment already ships.
-# On some serverless environment versions protobuf is a core package: changing its major version stops the Python
-# restart in the next cell ("Kernel exited"). Staying on the same major version is always safe.
+# DBTITLE 1,Choose the library versions
+# Pick library versions that fit this environment: keep protobuf on the major version it already has.
+# On some serverless environment versions protobuf is a core package, and changing its major version
+# stops the Python restart in the next cell ("Kernel exited").
 import importlib.metadata as _md
 _reqs = ["databricks-sdk>=0.81.0", "psycopg[binary]>=3.0"]
 try:
@@ -56,31 +60,110 @@ print("Installing: " + ", ".join(_reqs))
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Install the libraries
+# MAGIC
+# MAGIC **What:** we're installing the libraries from the list we prepared.
+# MAGIC
+# MAGIC **Why:** they let Python create the lab project and query Postgres.
+# MAGIC
+# MAGIC **Look for:** the cell finishes successfully. Then run the restart cell below.
+
+# COMMAND ----------
+
+# DBTITLE 1,Install the libraries
 # MAGIC %pip install --quiet -r /tmp/lakebase_lab_requirements.txt
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Restart Python
+# MAGIC
+# MAGIC **What:** we're restarting Python so it loads the installed libraries.
+# MAGIC
+# MAGIC **Why:** the running session may still have older versions loaded.
+# MAGIC
+# MAGIC **Look for:** the restart completes. Continue with the next cell. If you restart later, rerun the setup and exercises in order.
+
+# COMMAND ----------
+
+# DBTITLE 1,Restart Python
 dbutils.library.restartPython()
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Load the shared setup
+# MAGIC
+# MAGIC **What:** we're loading the code that identifies your user and connects to Lakebase.
+# MAGIC
+# MAGIC **Why:** each person needs their own lab project and connection.
+# MAGIC
+# MAGIC **Look for:** `Lab helpers loaded` with your user name. The next cell opens the project.
+
+# COMMAND ----------
+
+# DBTITLE 1,Load the shared setup
 # MAGIC %run ../_setup
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 0. Prepare and validate
+# MAGIC ### Create or reopen your Search project
 # MAGIC
-# MAGIC This creates the project when it is missing, enables Search when needed, creates your schema,
-# MAGIC and runs one rolled-back exact, vector, and BM25 probe before touching fixture data. Rerunning
-# MAGIC this cell resumes the same owned, dedicated project.
+# MAGIC **What:** we're opening your own lab project, enabling Search, and checking the connection.
+# MAGIC
+# MAGIC **Why:** enabling Search restarts compute and can't be undone. That's why each person uses a dedicated lab project.
+# MAGIC
+# MAGIC **Look for:** `READY`. If you see `NOT READY`, stop here and follow the instructor while we resolve it.
+# MAGIC
+# MAGIC When the session setup notebook runs this lab ahead of time, this cell also checks that it requested the right release.
 
 # COMMAND ----------
+
+# DBTITLE 1,Create or reopen your Search project
+LAB_RELEASE_VERSION = "2026-11-06a"
+
+
+def _session_parameter(name, default=""):
+    """Job parameters become widgets; an interactive run has no preparation parameters."""
+    try:
+        return str(dbutils.widgets.get(name)).strip()
+    except Exception:
+        return default
+
+
+_prepare_value = _session_parameter("prepare_for_session", "false").lower()
+if _prepare_value not in ("true", "false"):
+    raise RuntimeError("prepare_for_session must be true or false. No lab project has been opened.")
+PREPARE_FOR_SESSION = _prepare_value == "true"
+SESSION_VALIDATION_RUN_ID = _session_parameter("validation_run_id")
+SESSION_ENVIRONMENT = _session_parameter("session_environment")
+SEARCH_ANSWER_CHECKS = 0
+if PREPARE_FOR_SESSION:
+    if _session_parameter("release_version") != LAB_RELEASE_VERSION:
+        raise RuntimeError("This Search notebook does not match the requested session release. Install the matching release first.")
+    if not SESSION_VALIDATION_RUN_ID:
+        raise RuntimeError("Session preparation needs a validation_run_id. Start it from the session setup notebook.")
+    if SESSION_ENVIRONMENT != "6":
+        raise RuntimeError("This session release requires the preparation job to use environment version 6.")
 
 conn = prepare_retail_search_lab()
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Load the query and display helpers
+# MAGIC
+# MAGIC **What:** we're loading functions that run SQL, make the example vectors, and display results.
+# MAGIC
+# MAGIC **Why:** the later cells can focus on the search we're testing. The vectors use fixed word groups so everyone gets the same example results.
+# MAGIC
+# MAGIC **Look for:** `Lab helpers ready`. This cell defines functions; it doesn't load products or run a search.
+
+# COMMAND ----------
+
+# DBTITLE 1,Load the query and display helpers
 import math
 import re
 
@@ -122,47 +205,18 @@ def fetch_rows(sql, params=(), finish_transaction=True):
     """Return query rows as dictionaries."""
     return run_sql(sql, params, fetch=True, finish_transaction=finish_transaction)
 
-# COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## 1. Install the Search extensions
-# MAGIC
-# MAGIC `lakebase_vector` supplies the vector type and ANN index. `lakebase_text` supplies the BM25
-# MAGIC index and query operator. The lab owns only its two tables and rebuilds them on every run.
-
-# COMMAND ----------
-
-try:
-    execute("CREATE EXTENSION IF NOT EXISTS lakebase_vector CASCADE;")
-    execute("CREATE EXTENSION IF NOT EXISTS lakebase_text;")
-except Exception as exc:
-    print("✗ Lakebase Search extension installation failed after preparation.")
-    raise RuntimeError("Lakebase Search extension installation failed") from exc
-
-print("✓ Lakebase Search extensions ready")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## 2. Build repeatable demo vectors
-# MAGIC
-# MAGIC This lab uses one deterministic teaching function for both product and query text. That keeps
-# MAGIC the result repeatable and makes the vector behavior easy to inspect.
-# MAGIC
-# MAGIC This is not an embedding model. A real evaluation would replace `demo_embedding` with one
-# MAGIC chosen embedding endpoint for both the corpus and each query.
-
-# COMMAND ----------
-
+# Demo vectors for "search by meaning". A real app sends text to an embedding model and gets back
+# hundreds of numbers. This stand-in uses 8, one per idea below, so results are the same every run.
 CONCEPT_AXES = (
-    {"impact", "driver", "drive", "driving", "fasten", "fastening", "screw", "screws", "bolt", "bolts", "tool", "torque"},
-    {"drill", "drilling", "hole", "holes", "masonry"},
-    {"saw", "cut", "cutting", "blade", "jigsaw", "reciprocating"},
-    {"outdoor", "leaf", "blower", "trim", "trimmer", "hedge", "yard"},
-    {"vacuum", "wet", "dry", "dust", "cleanup", "clean", "sand", "sander", "sanding", "grind", "grinder"},
-    {"deck", "decks", "decking", "board", "boards", "framing", "long", "structural", "lumber"},
-    {"battery", "charger", "light", "cordless", "power", "brushless"},
-    {"socket", "wrench", "hand", "ratchet", "manual", "screwdriver"},
+    {"impact", "driver", "drive", "driving", "fasten", "fastening", "screw", "screws", "bolt", "bolts", "tool", "torque"},  # driving screws
+    {"drill", "drilling", "hole", "holes", "masonry"},  # drilling
+    {"saw", "cut", "cutting", "blade", "jigsaw", "reciprocating"},  # cutting
+    {"outdoor", "leaf", "blower", "trim", "trimmer", "hedge", "yard"},  # yard work
+    {"vacuum", "wet", "dry", "dust", "cleanup", "clean", "sand", "sander", "sanding", "grind", "grinder"},  # cleanup
+    {"deck", "decks", "decking", "board", "boards", "framing", "long", "structural", "lumber"},  # decks and framing
+    {"battery", "charger", "light", "cordless", "power", "brushless"},  # cordless power
+    {"socket", "wrench", "hand", "ratchet", "manual", "screwdriver"},  # hand tools
 )
 
 
@@ -174,22 +228,72 @@ def demo_embedding(text):
     return "[" + ",".join(f"{value / norm:.6f}" for value in values) + "]"
 
 
-print("✓ Deterministic teaching encoder ready: 8 visible concept axes")
+# Readable output
+def place(rank):
+    """1 -> '1st', 2 -> '2nd', None -> '-'."""
+    if rank is None:
+        return "-"
+    rank = int(rank)
+    suffix = "th" if 10 <= rank % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(rank % 10, "th")
+    return f"{rank}{suffix}"
+
+
+def short_title(title):
+    return title.replace(", Tool Only", "")
+
+
+def show_ranking(store_id, rows, rule):
+    """Print one store's ranked results with both search ranks side by side."""
+    print(f"\n{STORE_NAMES[store_id]}  |  rule: {rule}")
+    print(f"  {'Final':>5}  {'SKU':<8}  {'Brand':<11}  {'Vector rank':>11}  {'Keyword rank':>12}  {'Lineup':<8}  {'Stock':>5}")
+    for row in rows:
+        print(
+            f"  {row['final_rank']:>5}  {row['sku']:<8}  {row['brand']:<11}  "
+            f"{place(row['vector_rank']):>11}  {place(row['bm25_rank']):>12}  "
+            f"{row['assortment_status']:<8}  {row['on_hand']:>5}"
+        )
+    if not rows:
+        print("  (no products fit)")
+
+
+def say_answer(store_id, rows):
+    """Print the answer the associate would see: the top result, where it is, and what it costs."""
+    if not rows:
+        print("  Answer: none fit")
+        return
+    top = rows[0]
+    print(
+        f"  Answer: {short_title(top['title'])} (SKU {top['sku']}), "
+        f"{top['on_hand']} on the shelf, aisle {top['aisle']}, ${float(top['price']):.2f}"
+    )
+
+
+print("✓ Lab helpers ready")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Build a fictional product catalog and two stores
+# MAGIC ## 1. Load the products and store inventory
+# MAGIC ### Prepare the example data
 # MAGIC
-# MAGIC `retail_product_search` owns exact identifiers, typed product attributes, search text, and a
-# MAGIC vector. `retail_store_product` owns the volatile store context: assortment, quantity, price,
-# MAGIC and aisle.
+# MAGIC **What:** we're putting 24 products and two stores' inventory into Python lists.
 # MAGIC
-# MAGIC The target products have different `CORE` and `EXTENDED` status by store. Pine Junction also
-# MAGIC has one `CORE` stockout so we can see how assortment and availability change the eligible set.
+# MAGIC **Why:** everyone needs the same starting data. The next cell writes it to Lakebase.
+# MAGIC
+# MAGIC ```text
+# MAGIC Product catalog                   Store inventory
+# MAGIC SKU, barcode, brand               Store and product
+# MAGIC Type, voltage, kit                Regular or extended lineup
+# MAGIC Description                       Stock, price, aisle
+# MAGIC ```
+# MAGIC
+# MAGIC **Look for:** `24 products and 2 stores`. No database tables change in this cell.
 
 # COMMAND ----------
 
+# DBTITLE 1,Prepare the example data
+# The made-up catalog. Products 1 to 5 are the impact drivers this lab is about.
+# The other 19 are there so search has something to tell apart.
 PRODUCTS = [
     (1, "10001234", "850000100001", "NorthPeak", "impact_driver", 20, "TOOL_ONLY",
      "NorthPeak 20V Brushless Impact Driver, Tool Only",
@@ -270,6 +374,7 @@ STORE_NAMES = {
     "store_river": "River Bend",
 }
 
+# The lineup for the five drivers is set on purpose. Everything else follows a simple pattern.
 TARGET_STATUS = {
     ("store_pine", 1): "CORE",
     ("store_pine", 2): "EXTENDED",
@@ -282,6 +387,7 @@ TARGET_STATUS = {
     ("store_river", 4): "CORE",
 }
 
+# Pine Junction is out of the NorthPeak 10001234. That's the trap.
 TARGET_ON_HAND = {
     ("store_pine", 1): 0,
     ("store_pine", 4): 6,
@@ -307,12 +413,37 @@ def build_store_rows():
 
 
 STORE_ROWS = build_store_rows()
+river_keyword_forward = None
+SEARCH_ANSWER_CHECKS = 0
+print(f"✓ Loaded the made-up data: {len(PRODUCTS)} products and {len(STORE_NAMES)} stores (Pine Junction and River Bend)")
 
 # COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Build the catalog and inventory tables
+# MAGIC
+# MAGIC **What:** we're replacing this lab's two tables, loading the examples, and creating the search indexes.
+# MAGIC
+# MAGIC **Why:** search needs the product catalog and each store's inventory in the database. Rebuilding gives us the same starting point on every run.
+# MAGIC
+# MAGIC **Look for:** 24 products and 48 inventory rows, one per product at each store. NorthPeak 10001234 is out of stock at Pine Junction.
+# MAGIC
+# MAGIC `CORE` means regular lineup. `EXTENDED` means carried outside that lineup. Both can have stock.
+
+# COMMAND ----------
+
+# DBTITLE 1,Build the catalog and inventory tables
+try:
+    execute("CREATE EXTENSION IF NOT EXISTS lakebase_vector CASCADE;")
+    execute("CREATE EXTENSION IF NOT EXISTS lakebase_text;")
+except Exception as exc:
+    print("✗ Lakebase Search extension installation failed after preparation.")
+    raise RuntimeError("Lakebase Search extension installation failed") from exc
 
 execute("DROP TABLE IF EXISTS retail_store_product CASCADE;")
 execute("DROP TABLE IF EXISTS retail_product_search CASCADE;")
 
+# The catalog: what each product is. The same at every store.
 execute("""
     CREATE TABLE retail_product_search (
         product_id       INTEGER PRIMARY KEY,
@@ -329,6 +460,7 @@ execute("""
     );
 """)
 
+# The shelves: one row per product per store.
 execute("""
     CREATE TABLE retail_store_product (
         store_id          TEXT NOT NULL,
@@ -373,7 +505,8 @@ except Exception:
     conn.rollback()
     raise
 
-# Build both Search indexes after the corpus exists. BM25 needs the corpus statistics.
+# Search indexes: one for meaning (vector), one for keywords (BM25). Built after the data is in,
+# because BM25 needs word counts across the whole catalog.
 execute("CREATE INDEX retail_product_search_ann ON retail_product_search USING lakebase_ann (embedding vector_cosine_ops);")
 execute("CREATE INDEX retail_product_search_bm25 ON retail_product_search USING lakebase_bm25 (search_tsv);")
 execute("CREATE INDEX retail_product_search_attributes ON retail_product_search (product_type, voltage, kit_type, brand);")
@@ -389,41 +522,60 @@ counts = fetch_rows("""
 assert counts["products"] == 24
 assert counts["store_rows"] == 48
 assert counts["stores"] == 2
-print("✓ Retail corpus built: 24 products across 2 stores")
+print("✓ Built the catalog (24 products) and the shelves (48 rows: every product at both stores)")
 
-target_store_context = fetch_rows("""
-    SELECT s.store_id, p.sku, p.brand, s.assortment_status, s.on_hand, s.price, s.aisle
-    FROM retail_store_product s
-    JOIN retail_product_search p USING (product_id)
-    WHERE p.sku IN ('10001234', '10001235', '10001237', '10001238')
-    ORDER BY s.store_id, p.sku;
+drivers = fetch_rows("""
+    SELECT p.sku, p.brand, p.title, s.store_id, s.assortment_status, s.on_hand
+    FROM retail_product_search p
+    JOIN retail_store_product s USING (product_id)
+    WHERE p.sku IN ('10001234', '10001235', '10001236', '10001237', '10001238')
+    ORDER BY p.sku, s.store_id;
 """)
-print("\nTarget store context")
-for row in target_store_context:
-    print(dict(row))
+by_sku = {}
+for row in drivers:
+    entry = by_sku.setdefault(row["sku"], {"title": row["title"], "brand": row["brand"]})
+    entry[row["store_id"]] = row
 
-pine_context_by_sku = {
-    row["sku"]: row for row in target_store_context if row["store_id"] == "store_pine"
-}
+print("\nThe five 20V tool-only impact drivers in the catalog")
+print(f"  {'SKU':<8}  {'Brand':<11}  {'Pine Junction':<20}  {'River Bend':<20}")
+for sku, entry in by_sku.items():
+    shelves = []
+    notes = []
+    for store_id, store_name in STORE_NAMES.items():
+        shelf = entry[store_id]
+        shelves.append(f"{shelf['assortment_status']}, {shelf['on_hand']} on shelf")
+        if shelf["on_hand"] == 0:
+            notes.append(f"out of stock at {store_name}")
+    if entry["brand"] == "EmberVale":
+        notes.append('the customer said "not EmberVale"')
+    print(f"  {sku:<8}  {entry['brand']:<11}  {shelves[0]:<20}  {shelves[1]:<20}")
+
+print("NorthPeak 10001234 is out of stock at Pine Junction. The customer excluded EmberVale.")
+
+pine_context_by_sku = {sku: entry["store_pine"] for sku, entry in by_sku.items()}
 assert pine_context_by_sku["10001234"]["assortment_status"] == "CORE"
 assert pine_context_by_sku["10001234"]["on_hand"] == 0
 assert pine_context_by_sku["10001237"]["assortment_status"] == "CORE"
 assert pine_context_by_sku["10001237"]["on_hand"] > 0
 assert pine_context_by_sku["10001238"]["assortment_status"] == "CORE"
 assert pine_context_by_sku["10001238"]["on_hand"] > 0
-print("✓ Store fixture includes a CORE stockout and two eligible CORE candidates")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Look up an exact SKU or UPC
+# MAGIC ## 2. Look up a SKU and a barcode
 # MAGIC
-# MAGIC Use an equality predicate for SKU and UPC. Do not send exact IDs through vector search or
-# MAGIC BM25. PostgreSQL may still scan this 24-row fixture.
+# MAGIC **What:** we're looking up NorthPeak 10001234 at Pine Junction, first by SKU, then by barcode.
+# MAGIC
+# MAGIC **Why:** we already have the product's ID. An exact lookup gets the product and its store inventory without ranking alternatives.
+# MAGIC
+# MAGIC **Look for:** both IDs return the same product. Pine Junction has zero in stock. Finding a product doesn't mean we can sell it today.
 
 # COMMAND ----------
 
+# DBTITLE 1,2. Look up a SKU and a barcode
 def lookup_identifier(identifier, store_id):
+    """Exact lookup by SKU or barcode, with this store's shelf data. No search involved."""
     return fetch_rows("""
         SELECT
             p.sku, p.upc, p.title, p.brand,
@@ -439,22 +591,39 @@ def lookup_identifier(identifier, store_id):
 
 
 exact_rows = lookup_identifier("10001234", "store_pine")
+upc_rows = lookup_identifier("850000100001", "store_pine")
 assert exact_rows and exact_rows[0]["sku"] == "10001234"
-print("Route: exact identifier -> indexable SQL equality")
-print(dict(exact_rows[0]))
-print("✓ Exact identifier route returned 10001234")
+assert upc_rows and upc_rows[0]["sku"] == "10001234"
+
+hit = exact_rows[0]
+print("Typed SKU 10001234 at Pine Junction:")
+print(f"  {hit['title']} (barcode {hit['upc']})")
+print(f"  Lineup: {hit['assortment_status']}  |  On the shelf: {hit['on_hand']}  |  Aisle {hit['aisle']}  |  ${float(hit['price']):.2f}")
+print(f"Scanned barcode 850000100001 at Pine Junction: the same product, SKU {upc_rows[0]['sku']}")
+print("\n→ One WHERE clause found it: sku = ... OR upc = ...  No search involved.")
+print("→ It's out of stock at Pine Junction. That matters in step 5.")
+print("✓ Exact lookup found SKU 10001234 by SKU and by barcode")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 5. Use explicit query fields
+# MAGIC ## 3. Set the customer's requirements
 # MAGIC
-# MAGIC Parsing is outside this lab. We provide the fields so every constraint is visible in SQL. The
-# MAGIC same `search_text` goes to the vector fixture and BM25.
+# MAGIC **What:** we're supplying the request fields and counting how many products meet them.
+# MAGIC
+# MAGIC ```text
+# MAGIC Must match:  impact driver, 20V, tool only, not EmberVale
+# MAGIC Rank for:    driving long screws into deck boards
+# MAGIC ```
+# MAGIC
+# MAGIC **Why:** voltage and brand exclusion are requirements. The description helps rank the products that meet those requirements. An application would need to extract and validate these fields; we've filled them in here.
+# MAGIC
+# MAGIC **Look for:** 24 products become 4. The kit and the excluded brand are removed before we compare search results.
 
 # COMMAND ----------
 
-RAW_QUERY = "20V brushless tool for driving long screws into deck boards, tool only, exclude EmberVale"
+# DBTITLE 1,3. Set the customer's requirements
+RAW_QUERY = "I need a 20V impact driver for long deck screws. Tool only. Not EmberVale."
 
 REQUEST = {
     "search_text": "tool for driving long screws into deck boards",
@@ -464,22 +633,73 @@ REQUEST = {
     "excluded_brands": ["EmberVale"],
 }
 
-print("Natural language:", RAW_QUERY)
-print("Parser outputs supplied by the lab:", REQUEST)
-print("Query vector:", demo_embedding(REQUEST["search_text"]))
+print("The customer said:")
+print(f'  "{RAW_QUERY}"\n')
+print("Hard rules (a product has to match all of them):")
+print(f"  type         {REQUEST['product_type']}")
+print(f"  voltage      {REQUEST['voltage']}V")
+print(f"  kit          {REQUEST['kit_type']}")
+print(f"  not brand    {', '.join(REQUEST['excluded_brands'])}")
+print("The job, in words (search ranks on this):")
+print(f'  "{REQUEST["search_text"]}"')
+
+funnel = fetch_rows("""
+    SELECT
+        count(*) AS catalog,
+        count(*) FILTER (WHERE product_type = %s) AS by_type,
+        count(*) FILTER (WHERE product_type = %s AND voltage = %s) AS by_voltage,
+        count(*) FILTER (WHERE product_type = %s AND voltage = %s AND kit_type = %s) AS by_kit,
+        count(*) FILTER (WHERE product_type = %s AND voltage = %s AND kit_type = %s
+                           AND NOT (brand = ANY(%s::text[]))) AS by_brand
+    FROM retail_product_search;
+""", (
+    REQUEST["product_type"],
+    REQUEST["product_type"], REQUEST["voltage"],
+    REQUEST["product_type"], REQUEST["voltage"], REQUEST["kit_type"],
+    REQUEST["product_type"], REQUEST["voltage"], REQUEST["kit_type"], REQUEST["excluded_brands"],
+))[0]
+assert (funnel["catalog"], funnel["by_type"], funnel["by_voltage"], funnel["by_kit"], funnel["by_brand"]) == (24, 6, 6, 5, 4)
+
+print("\nHow the hard rules shrink the catalog:")
+print(f"  {funnel['catalog']:>2}  products in the catalog")
+print(f"  {funnel['by_type']:>2}  are impact drivers")
+print(f"  {funnel['by_voltage']:>2}  ...and 20V")
+print(f"  {funnel['by_kit']:>2}  ...and tool only (the ForgeWorks kit with a battery is out)")
+print(f"  {funnel['by_brand']:>2}  ...and not EmberVale")
+print(f"\n→ Only these {funnel['by_brand']} can be the answer, at any store. Next, we rank them.")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 6. Put search and store rules in one SQL query
+# MAGIC ## 4. Compare vector and keyword results
+# MAGIC ### Load the search query
 # MAGIC
-# MAGIC The vector and BM25 queries join store data and apply the hard filters before ranking. Stock is
-# MAGIC always required. `core_only=True` adds one more filter: the product must be in the store's
-# MAGIC `CORE` assortment. Price and aisle are returned but do not affect rank.
+# MAGIC **What:** we're saving the SQL query and a function to call it. The next cell runs it.
+# MAGIC
+# MAGIC **Why:** we want to compare two rankings over the same eligible products. Vector search compares the example vectors. Keyword search (BM25) scores word matches. We combine their ranks to produce one list.
+# MAGIC
+# MAGIC ```text
+# MAGIC Products that meet the customer and store rules
+# MAGIC                 /                   \
+# MAGIC         Vector ranking         Keyword ranking
+# MAGIC                 \                   /
+# MAGIC                  Combined ranking
+# MAGIC ```
+# MAGIC
+# MAGIC **Look for:** `Search query loaded`. In the SQL, `WHERE` sets eligibility, the two ranking sections score products, and `scored` combines the ranks. We don't need to read every line aloud.
+# MAGIC
+# MAGIC The vector example uses fixed word groups, not a trained model. These rankings help us follow the query; real search quality needs a separate test.
 
 # COMMAND ----------
 
+# DBTITLE 1,Load the search query
 STORE_AWARE_SEARCH_SQL = """
+-- One query does the whole search. Read it top to bottom:
+--   request         the inputs: which store, the question, the customer rules, the store rule, the blend
+--   vector_scored   rank by meaning, over eligible products only
+--   keyword_scored  rank by keyword, over the same eligible products
+--   fused           the two rankings side by side
+--   scored          blend the two places into one score
 WITH request AS (
     SELECT
         %s::text AS store_id,
@@ -500,11 +720,11 @@ vector_scored AS (
     FROM retail_product_search p
     JOIN retail_store_product s ON s.product_id = p.product_id
     CROSS JOIN request r
-    WHERE s.store_id = r.store_id
-      AND s.assortment_status IN ('CORE', 'EXTENDED')
-      AND s.on_hand > 0
-      AND (NOT r.core_only OR s.assortment_status = 'CORE')
-      AND p.product_type = r.product_type
+    WHERE s.store_id = r.store_id                               -- this store
+      AND s.assortment_status IN ('CORE', 'EXTENDED')           -- the store carries it
+      AND s.on_hand > 0                                         -- it is on the shelf
+      AND (NOT r.core_only OR s.assortment_status = 'CORE')     -- step 5 turns this on: regular lineup only
+      AND p.product_type = r.product_type                       -- the customer rules
       AND p.voltage = r.voltage
       AND p.kit_type = r.kit_type
       AND NOT (p.brand = ANY(r.excluded_brands))
@@ -528,7 +748,7 @@ keyword_scored AS (
     FROM retail_product_search p
     JOIN retail_store_product s ON s.product_id = p.product_id
     CROSS JOIN request r
-    WHERE s.store_id = r.store_id
+    WHERE s.store_id = r.store_id                               -- the same rules as above
       AND s.assortment_status IN ('CORE', 'EXTENDED')
       AND s.on_hand > 0
       AND (NOT r.core_only OR s.assortment_status = 'CORE')
@@ -567,6 +787,7 @@ scored AS (
         f.vector_rank,
         f.bm25_score,
         f.bm25_rank,
+        -- the blend: a higher place in either list earns more points (reciprocal rank fusion)
         COALESCE(r.vector_weight / (60.0 + f.vector_rank::double precision), 0.0)
           + COALESCE(r.bm25_weight / (60.0 + f.bm25_rank::double precision), 0.0) AS weighted_rrf,
         CASE
@@ -612,6 +833,7 @@ LIMIT 10;
 
 
 def retail_search(store_id, request, core_only=True, vector_weight=1.15, bm25_weight=1.00):
+    """Run the one query. The default blend leans a little toward meaning (1.15 vs 1.00); step 4b flips it."""
     params = (
         store_id,
         demo_embedding(request["search_text"]),
@@ -627,38 +849,31 @@ def retail_search(store_id, request, core_only=True, vector_weight=1.15, bm25_we
     return fetch_rows(STORE_AWARE_SEARCH_SQL, params)
 
 
-def show_results(label, rows):
-    print(f"\n{label}")
-    print("rank | sku      | brand       | vec | bm25 | status   | qty | price  | aisle | weighted_rrf")
-    print("-----+----------+-------------+-----+------+----------+-----+--------+-------+-------------")
-    for row in rows:
-        vector_rank = "-" if row["vector_rank"] is None else str(row["vector_rank"])
-        bm25_rank = "-" if row["bm25_rank"] is None else str(row["bm25_rank"])
-        print(
-            f"{row['final_rank']:>4} | {row['sku']:<8} | {row['brand']:<11} | "
-            f"{vector_rank:>3} | {bm25_rank:>4} | "
-            f"{row['assortment_status']:<8} | {row['on_hand']:>3} | "
-            f"{float(row['price']):>6.2f} | {str(row['aisle']):<5} | "
-            f"{float(row['weighted_rrf']):.8f}"
-        )
-    if rows:
-        print("Rule:", rows[0]["rule_applied"])
+BASIC_RULE = "carries it, and it's on the shelf"
+CORE_RULE = "regular lineup (CORE), and it's on the shelf"
+print("✓ Search query loaded. The next cell runs it at both stores.")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 7. Start with carried, in-stock candidates
+# MAGIC ### 4a. Search both stores
 # MAGIC
-# MAGIC With `core_only=False`, both stores allow `CORE` and `EXTENDED` products, while still requiring
-# MAGIC positive stock. The same product should win in both stores with the semantic-forward weights.
+# MAGIC **What:** we're running the same request at Pine Junction and River Bend. Products must be carried by that store and in stock.
+# MAGIC
+# MAGIC **Why:** this gives us a starting result before we add the regular-lineup rule in step 5.
+# MAGIC
+# MAGIC **Look for:** ForgeWorks is the top result at both stores. At River Bend, the vector and keyword rankings disagree. `Final` is their combined order.
 
 # COMMAND ----------
 
+# DBTITLE 1,4a. Search both stores
 pine_base = retail_search("store_pine", REQUEST, core_only=False)
 river_base = retail_search("store_river", REQUEST, core_only=False)
 
-show_results("Pine Junction, carried and in stock", pine_base)
-show_results("River Bend, carried and in stock", river_base)
+show_ranking("store_pine", pine_base, BASIC_RULE)
+say_answer("store_pine", pine_base)
+show_ranking("store_river", river_base, BASIC_RULE)
+say_answer("store_river", river_base)
 
 assert pine_base and river_base
 assert pine_base[0]["sku"] == "10001235"
@@ -667,6 +882,7 @@ assert river_base[0]["sku"] == "10001235"
 river_base_by_sku = {row["sku"]: row for row in river_base}
 assert river_base_by_sku["10001235"]["vector_rank"] < river_base_by_sku["10001234"]["vector_rank"]
 assert river_base_by_sku["10001234"]["bm25_rank"] < river_base_by_sku["10001235"]["bm25_rank"]
+assert "10001234" not in {row["sku"] for row in pine_base}
 
 for row in pine_base + river_base:
     assert row["product_type"] == "impact_driver"
@@ -674,21 +890,27 @@ for row in pine_base + river_base:
     assert row["kit_type"] == "TOOL_ONLY"
     assert row["brand"] != "EmberVale"
 
-print("✓ Typed filters and exclusion stayed in SQL")
-print("✓ Vector and BM25 disagree on the leading product")
-print("✓ Base hybrid returned the same winner for both stores")
+print("\n→ Same answer at both stores: ForgeWorks 10001235.")
+print("→ At River Bend the rankings disagree on 1st place: by vector it's ForgeWorks, by keyword it's NorthPeak 10001234.")
+print("→ NorthPeak 10001234 isn't on Pine Junction's list at all. Zero on the shelf, so it never gets ranked.")
+print("✓ Ranked two ways and blended, and every result follows the customer's hard rules")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Change the retrieval weights
+# MAGIC ### 4b. Give keywords more weight (optional, 5 minutes)
 # MAGIC
-# MAGIC The two retrieval signals intentionally disagree. The semantic-forward defaults put SKU
-# MAGIC `10001235` first. Flip the weights toward BM25 and SKU `10001234` should win without changing
-# MAGIC the query, store, or hard filters. Use the rank columns to explain why the winner changes.
+# MAGIC **What:** we're giving River Bend's keyword ranking a little more weight. The request, stock, and eligibility rules stay the same.
+# MAGIC
+# MAGIC **Why:** ForgeWorks ranks first by vector; NorthPeak ranks first by keyword. With equal weights they'd tie. Changing the weights lets us test which result to prefer.
+# MAGIC
+# MAGIC **Look for:** predict which product will come first, then run the cell. These are example weights. We'd choose production weights using real questions and expected results.
+# MAGIC
+# MAGIC You can skip this cell and continue to step 5. Later searches use the original weights.
 
 # COMMAND ----------
 
+# DBTITLE 1,4b. Give keywords more weight (optional, 5 minutes)
 river_keyword_forward = retail_search(
     "store_river",
     REQUEST,
@@ -696,27 +918,41 @@ river_keyword_forward = retail_search(
     vector_weight=1.00,
     bm25_weight=1.15,
 )
-show_results("River Bend, keyword-forward hybrid", river_keyword_forward)
+show_ranking("store_river", river_keyword_forward, BASIC_RULE + " (blend leans toward keywords)")
+say_answer("store_river", river_keyword_forward)
 assert river_keyword_forward[0]["sku"] == "10001234"
-print("✓ Keyword-forward weights changed the base hybrid winner")
+
+print("\n→ Leaning toward keywords flipped River Bend's answer to NorthPeak 10001234. Nothing else changed.")
+print("✓ Changing only the blend changed the answer")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 8. Require CORE assortment
+# MAGIC ## 5. Recommend only the store's regular lineup
 # MAGIC
-# MAGIC Now set `core_only=True` without changing the query, parser outputs, vector, or BM25 weights.
-# MAGIC Each store still has two eligible candidates. At Pine Junction, SKU `10001234` is `CORE` but
-# MAGIC out of stock, and SKU `10001237` wins the remaining ranking. At River Bend, SKU `10001235`
-# MAGIC stays first. The same policy runs before both candidate lists are ranked.
+# MAGIC **What:** for this exercise, the store asks us to recommend its regular lineup only. We turn on the `CORE` filter in both rankings.
+# MAGIC
+# MAGIC **Why:** a product can be in stock and still be outside that lineup. This is an example store policy we control, not a rule every retailer needs.
+# MAGIC
+# MAGIC | Product | Pine Junction | River Bend |
+# MAGIC |---|---|---|
+# MAGIC | NorthPeak 10001234 | Regular, but out of stock | Extended lineup |
+# MAGIC | ForgeWorks 10001235 | Extended lineup | Regular, in stock |
+# MAGIC | BlueOak 10001237 | Regular, in stock | Regular, in stock |
+# MAGIC | NorthPeak 10001238 | Regular, in stock | Extended lineup |
+# MAGIC
+# MAGIC **Look for:** which products are still eligible at each store? Pine Junction drops ForgeWorks even though it has stock. Compare the results with step 4a; the ranking weights are the same.
 
 # COMMAND ----------
 
+# DBTITLE 1,5. Recommend only the store's regular lineup
 pine_store_aware = retail_search("store_pine", REQUEST, core_only=True)
 river_store_aware = retail_search("store_river", REQUEST, core_only=True)
 
-show_results("Pine Junction, CORE and in stock before ranking", pine_store_aware)
-show_results("River Bend, CORE and in stock before ranking", river_store_aware)
+show_ranking("store_pine", pine_store_aware, CORE_RULE)
+say_answer("store_pine", pine_store_aware)
+show_ranking("store_river", river_store_aware, CORE_RULE)
+say_answer("store_river", river_store_aware)
 
 assert pine_store_aware[0]["sku"] == "10001237"
 assert pine_store_aware[0]["assortment_status"] == "CORE"
@@ -727,18 +963,31 @@ assert river_store_aware[0]["assortment_status"] == "CORE"
 assert len(river_store_aware) == 2
 assert pine_store_aware[0]["sku"] != river_store_aware[0]["sku"]
 
-print("✓ Same query, two stores, two explainable winners")
+print()
+for store_id, before, after in (("store_pine", pine_base, pine_store_aware), ("store_river", river_base, river_store_aware)):
+    kept = {row["sku"] for row in after}
+    dropped = [f"{row['brand']} {row['sku']}" for row in before if row["sku"] not in kept]
+    print(f"→ {STORE_NAMES[store_id]} dropped {' and '.join(dropped)}: EXTENDED there, not regular lineup.")
+first, second = pine_store_aware[0], pine_store_aware[1]
+if first["vector_rank"] < second["vector_rank"] and first["bm25_rank"] > second["bm25_rank"]:
+    print(f"→ At Pine Junction, {first['brand']} and {second['brand']} {second['sku']} would tie with equal weights "
+          "(1st and 2nd in opposite rankings), so the higher vector weight puts BlueOak first.")
+print("✓ Regular-lineup results: BlueOak at Pine Junction, ForgeWorks at River Bend")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 9. Negative case: do not weaken hard constraints
+# MAGIC ## 6. Try a request nothing can satisfy
 # MAGIC
-# MAGIC Exclude all four brands with a matching 20V tool-only impact driver. The correct result is no
-# MAGIC rows. Do not ignore an exclusion or product filter just to return something.
+# MAGIC **What:** we're excluding all four brands that have a matching driver.
+# MAGIC
+# MAGIC **Why:** the query should respect the customer's requirements even when that leaves nothing to recommend. The app can ask whether they'd consider another brand.
+# MAGIC
+# MAGIC **Look for:** zero results. We haven't silently removed a requirement to fill the list.
 
 # COMMAND ----------
 
+# DBTITLE 1,6. Try a request nothing can satisfy
 negative_request = {
     **REQUEST,
     "excluded_brands": ["NorthPeak", "ForgeWorks", "EmberVale", "BlueOak"],
@@ -746,30 +995,28 @@ negative_request = {
 
 negative_rows = retail_search("store_pine", negative_request, core_only=True)
 assert negative_rows == []
-print("✓ Negative case returned no eligible products")
 
-# COMMAND ----------
-
-assert exact_rows[0]["sku"] == "10001234"
-assert pine_base[0]["sku"] == "10001235"
-assert river_base[0]["sku"] == "10001235"
-assert pine_store_aware[0]["sku"] == "10001237"
-assert river_store_aware[0]["sku"] == "10001235"
-assert negative_rows == []
-assert river_keyword_forward[0]["sku"] == "10001234"
-print("✓ Baseline answers passed: 7/7")
+print("The customer at Pine Junction says: not NorthPeak, not ForgeWorks, not EmberVale, not BlueOak.")
+show_ranking("store_pine", negative_rows, CORE_RULE)
+say_answer("store_pine", negative_rows)
+print("\n→ Zero rows, on purpose. The app should say none fit, not drop one of the customer's rules to find something.")
+print("✓ Nothing fit the customer's rules, and the query returned nothing")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 10. Change one inventory value
+# MAGIC ## 7. Restock a product and search again
 # MAGIC
-# MAGIC Before running the next cell, predict what happens when Pine Junction restocks SKU `10001234`.
-# MAGIC The query and weights do not change. The cell checks the new winner and restores the original
-# MAGIC stock.
+# MAGIC **What:** we're changing Pine Junction's NorthPeak 10001234 stock from 0 to 5, then repeating the search. The cell resets stock to 0 afterward.
+# MAGIC
+# MAGIC **Why:** the product was excluded because it was out of stock. We want to see what happens when it becomes available. The request, product descriptions, and search vectors stay the same.
+# MAGIC
+# MAGIC **Look for:** predict the new top result. After the reset, BlueOak should be first again.
 
 # COMMAND ----------
 
+# DBTITLE 1,7. Restock a product and search again
+print("A delivery shows up at Pine Junction: NorthPeak 10001234 goes from 0 to 5 on the shelf.")
 try:
     execute("""
         UPDATE retail_store_product
@@ -780,7 +1027,8 @@ try:
           );
     """)
     pine_restocked = retail_search("store_pine", REQUEST, core_only=True)
-    show_results("Pine Junction after restocking 10001234", pine_restocked)
+    show_ranking("store_pine", pine_restocked, CORE_RULE)
+    say_answer("store_pine", pine_restocked)
     assert pine_restocked[0]["sku"] == "10001234"
     assert pine_restocked[0]["vector_rank"] == 1
     assert pine_restocked[0]["bm25_rank"] == 1
@@ -796,31 +1044,102 @@ finally:
 
 pine_restored = retail_search("store_pine", REQUEST, core_only=True)
 assert pine_restored[0]["sku"] == "10001237"
-print("✓ Restocking 10001234 changed the winner; fixture restored")
-print("✓ Expected answers passed: 8/8")
+
+print("✓ Put the shelf back to 0, so Pine Junction's answer is BlueOak 10001237 again")
+
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 11. What did we actually learn?
+# MAGIC ### Check the exercise results
 # MAGIC
-# MAGIC This does not tell us which search system is better. It shows two clear routes in Postgres:
+# MAGIC **What:** we're checking the results from the exercises we ran.
 # MAGIC
-# MAGIC - SKU and UPC use exact equality.
-# MAGIC - Natural-language search uses product filters, vector and BM25 ranks, stock, and `CORE`
-# MAGIC   assortment in one query.
+# MAGIC **Why:** this confirms the examples matched our expectations. It doesn't grade production search quality.
 # MAGIC
-# MAGIC If that is useful, compare it with the current split path using representative queries and
-# MAGIC expected answers. Add a latency target before choosing an approach. If it is not useful, stop.
+# MAGIC **Look for:** 8 checks if you ran step 4b, or 7 with that optional step skipped.
+
+# COMMAND ----------
+
+# DBTITLE 1,Check the exercise results
+# Check the required exercises; the weight experiment is optional.
+SEARCH_ANSWER_CHECKS = 0
+assert exact_rows[0]["sku"] == "10001234"
+assert pine_base[0]["sku"] == "10001235"
+assert river_base[0]["sku"] == "10001235"
+assert pine_store_aware[0]["sku"] == "10001237"
+assert river_store_aware[0]["sku"] == "10001235"
+assert negative_rows == []
+assert pine_restocked[0]["sku"] == "10001234"
+if river_keyword_forward is not None:
+    assert river_keyword_forward[0]["sku"] == "10001234"
+    SEARCH_ANSWER_CHECKS = 8
+    print("✓ Lab check: all 8 answers came out the way this lab expects")
+else:
+    SEARCH_ANSWER_CHECKS = 7
+    print("✓ Lab check: 7 answers checked; optional step 4b was skipped")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Clean up (optional)
+# MAGIC ## 8. Would this help your application?
 # MAGIC
-# MAGIC The notebook drops and rebuilds its two tables on every run. To remove them now:
+# MAGIC We looked up an exact product, searched for alternatives, applied store rules, and repeated the search after a restock.
 # MAGIC
-# MAGIC ```python
-# MAGIC execute("DROP TABLE IF EXISTS retail_store_product CASCADE;")
-# MAGIC execute("DROP TABLE IF EXISTS retail_product_search CASCADE;")
-# MAGIC ```
+# MAGIC Where would this fit how you search today? Which store rules would you keep or change?
+# MAGIC
+# MAGIC If there's a useful case, the next step is a small test with 20 to 30 real questions and the expected results at each store. We'd need real embeddings and a way to extract the request fields. Today's examples don't establish search quality or performance.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Report the advance-setup result
+# MAGIC
+# MAGIC **What:** when the session setup notebook runs this lab, we're checking that all eight exercises passed and the inventory is back at its starting state.
+# MAGIC
+# MAGIC **Why:** the setup report needs to confirm that the full lab ran and left your project ready to use again.
+# MAGIC
+# MAGIC **Look for:** a preparation result during advance setup. In the room, this cell says the report is skipped and leaves your work in place.
+
+# COMMAND ----------
+
+# DBTITLE 1,Report the advance-setup result
+if not PREPARE_FOR_SESSION:
+    print("Advance-setup report skipped. Your lab project stays available.")
+else:
+    if SEARCH_ANSWER_CHECKS != 8 or river_keyword_forward is None:
+        raise RuntimeError("Session preparation requires all eight exercise checks, including step 4b. Run the complete notebook.")
+    prepared_state = fetch_rows("""
+        SELECT
+            (SELECT count(*) FROM retail_product_search) AS products,
+            (SELECT count(*) FROM retail_store_product) AS store_rows,
+            (SELECT s.on_hand
+             FROM retail_store_product s
+             JOIN retail_product_search p USING (product_id)
+             WHERE s.store_id = 'store_pine' AND p.sku = '10001234') AS restored_stock;
+    """)[0]
+    if (prepared_state["products"], prepared_state["store_rows"], prepared_state["restored_stock"]) != (24, 48, 0):
+        raise RuntimeError("Session preparation did not leave 24 products, 48 inventory rows, and the Pine Junction stock reset to zero.")
+    import json
+
+    dbutils.notebook.exit(json.dumps({
+        "status": "PASSED",
+        "lab": "search",
+        "release_version": LAB_RELEASE_VERSION,
+        "user": user_email,
+        "project_id": RETAIL_SEARCH_PROJECT_ID,
+        "schema": RETAIL_SEARCH_PG_SCHEMA,
+        "validation_run_id": SESSION_VALIDATION_RUN_ID,
+        "session_environment": "6",
+        "prepared": True,
+        "checks": ["exact", "hybrid", "store_rules", "no_result", "restock", "reset"],
+    }))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## When you're finished
+# MAGIC
+# MAGIC Rerunning the table-build cell resets this lab's two tables. The restock cell resets its own stock change.
+# MAGIC
+# MAGIC To remove the project, open Lakebase and check the project name printed during setup. Confirm it belongs to you and has the `retail-search-context` lab tag, then delete it when you no longer need your work. Closing the notebook doesn't delete the project.

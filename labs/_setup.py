@@ -1,4 +1,5 @@
 # Databricks notebook source
+# Modified by Ryan Cicak, 2026-11-06: standalone lab setup and presentation updates.
 # MAGIC %md
 # MAGIC # Lab Setup (shared)
 # MAGIC This notebook is `%run` by each lab to provide common utilities.
@@ -46,6 +47,19 @@ def retail_search_schema_for(email):
 RETAIL_SEARCH_PROJECT_ID = retail_search_project_id_for(user_email)
 RETAIL_SEARCH_PG_SCHEMA = retail_search_schema_for(user_email)
 
+
+def _rehearsal_param(name):
+    """Validation runs pass this as a job parameter. Participants never set it."""
+    try:
+        return (dbutils.widgets.get(name) or "").strip()
+    except Exception:
+        return ""
+
+
+_project_suffix = _rehearsal_param("project_suffix")
+if _project_suffix:
+    RETAIL_SEARCH_PROJECT_ID = f"{RETAIL_SEARCH_PROJECT_ID}-{_project_suffix}"
+
 _REQUIRED_TABLES = {"products", "events", "agent_sessions", "agent_messages", "agent_memory_store", "audit_log"}
 
 # An endpoint is usable once it leaves INIT. IDLE means it scaled to zero, which is
@@ -82,7 +96,7 @@ def wait_for_endpoint(branch="production", max_attempts=60, delay=5):
 def get_connection(branch="production", connect_retries=3):
     """Connect to a Lakebase branch. Returns a psycopg connection with dict_row.
 
-    Uses Databricks SDK OAuth (`generate_database_credential`) + sslmode=require —
+    Uses Databricks SDK OAuth (`generate_database_credential`) + sslmode=require  -
     the recommended path for notebooks and apps that can mint short-lived tokens.
     For interactive clients (psql/pgAdmin/DBeaver), prefer a native Postgres password
     role from the Lakebase App Connect dialog instead.
@@ -480,7 +494,7 @@ def prepare_retail_search_lab():
                 "a permission denial as a missing project."
             ) from exc
         except NotFound:
-            print(f"Creating dedicated Lakebase project: {project_id}")
+            print(f"Creating your Search project: {project_id}. The first run takes about a minute.")
             payload = {
                 "spec": {
                     "display_name": expected_display_name,
@@ -547,11 +561,7 @@ def prepare_retail_search_lab():
 
         pg_major = validate_project_safety(project)
         action = "created" if created_here else "reused"
-        print(
-            f"✓ Dedicated project: {action} {project_id} "
-            f"(PostgreSQL {pg_major}, purpose=lakebase-workshop, "
-            "lab=retail-search-context)"
-        )
+        print(f"✓ Dedicated project: {action} {project_id} (PostgreSQL {pg_major})")
 
         wait_for_exact_branch()
 
@@ -576,8 +586,8 @@ def prepare_retail_search_lab():
         missing_preloads = required_preloads - read_preloads(bootstrap_conn)
         if missing_preloads:
             print(
-                "Enabling Lakebase Search on this dedicated project. This cannot be "
-                "undone, restarts every project compute, and drops active connections."
+                "Turning on Lakebase Search in this project. It can't be turned off, and it "
+                "restarts the project's compute, so the lab only does this in a project of its own."
             )
             bootstrap_conn.close()
             bootstrap_conn = None
@@ -649,7 +659,7 @@ def prepare_retail_search_lab():
                 f"current role needs USAGE and CREATE on participant schema {pg_schema}"
             )
         schema_action = "created" if schema_created else "reused"
-        print(f"✓ Participant schema: {schema_action} {pg_schema} (no foundation tables seeded)")
+        print(f"✓ Participant schema: {schema_action} {pg_schema}")
 
         bootstrap_conn.close()
         bootstrap_conn = None
@@ -1169,10 +1179,11 @@ def _validate_retail_search_runtime(project_id, pg_schema):
         ):
             skipped(label, "PostgreSQL connection check failed")
 
-    print("\nLakebase Search lab readiness")
-    for status, label, detail in readiness:
-        marker = {"PASS": "✓", "FAIL": "✗", "SKIP": "○"}[status]
-        print(f"{marker} {label}: {detail}")
+    if any(status != "PASS" for status, _, _ in readiness):
+        print("\nLakebase Search lab readiness")
+        for status, label, detail in readiness:
+            marker = {"PASS": "✓", "FAIL": "✗", "SKIP": "○"}[status]
+            print(f"{marker} {label}: {detail}")
 
     failed_checks = [label for status, label, _ in readiness if status == "FAIL"]
     if failed_checks:
@@ -1188,8 +1199,8 @@ def _validate_retail_search_runtime(project_id, pg_schema):
 
     passed_checks = sum(status == "PASS" for status, _, _ in readiness)
     print(
-        f"\n✓ READY: all {passed_checks} checks passed. "
-        "The dedicated project is prepared, and no probe objects remain."
+        f"✓ READY: all {passed_checks} checks passed. You can sign in, the compute is up, Search works, "
+        "and a test search ran and cleaned up after itself."
     )
     return preflight_conn
 
@@ -1243,9 +1254,9 @@ def _find_seed_sql():
     try:
         nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
         ws = f"/Workspace{nb_path}"
-        # Calling notebook is labs/<lab>/<Notebook> — walk up 3 levels to project root
+        # Calling notebook is labs/<lab>/<Notebook>  -  walk up 3 levels to project root
         candidates.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(ws))), "bootstrap", "seed.sql"))
-        # _setup.py is labs/_setup — walk up 2 levels
+        # _setup.py is labs/_setup  -  walk up 2 levels
         candidates.append(os.path.join(os.path.dirname(os.path.dirname(ws)), "bootstrap", "seed.sql"))
     except Exception:
         pass
@@ -1357,7 +1368,7 @@ def _ensure_schema(conn, branch):
     with conn.cursor() as cur:
         cur.execute(sql)
     conn.commit()
-    print(f"✓ Schema {PG_SCHEMA} repaired — all tables now exist")
+    print(f"✓ Schema {PG_SCHEMA} repaired  -  all tables now exist")
 
 def get_endpoint_name(branch="production"):
     """Get the full endpoint resource name for a branch."""
@@ -1392,7 +1403,7 @@ def show_app_link(page_id, label=None):
 # Labs create durable artifacts (UC tables, Lakebase projects/branches/tables,
 # sync pipelines). These helpers build per-user, per-workspace URLs so a
 # participant can click straight through to what they just created. Everything
-# resolves dynamically from the current identity/workspace — nothing hardcoded.
+# resolves dynamically from the current identity/workspace  -  nothing hardcoded.
 # ---------------------------------------------------------------------------
 
 # The Lakebase UI addresses projects/branches by their system-generated UID
@@ -1526,10 +1537,22 @@ def show_view_link(label, url):
     except Exception:
         print(f"{label}: {url}")
 
-print(f"Shared-lab project:          {PROJECT_ID}")
-print(f"Shared-lab schema:           {PG_SCHEMA}")
-print(f"Standalone Search project:   {RETAIL_SEARCH_PROJECT_ID}")
-print(f"Standalone Search schema:    {RETAIL_SEARCH_PG_SCHEMA}")
-print(f"User:                        {user_email}")
-if APP_URL:
-    print(f"Lab App: {APP_URL}")
+def _calling_notebook_path():
+    try:
+        return dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get() or ""
+    except Exception:
+        return ""
+
+
+# The standalone labs make their own project, so the shared-lab names below would only confuse.
+_STANDALONE_LAB_FOLDERS = ("/labs/retail-search-context/", "/labs/branch-per-change/")
+if any(folder in _calling_notebook_path() for folder in _STANDALONE_LAB_FOLDERS):
+    print(f"✓ Lab helpers loaded for {user_email}")
+else:
+    print(f"Shared-lab project:          {PROJECT_ID}")
+    print(f"Shared-lab schema:           {PG_SCHEMA}")
+    print(f"Standalone Search project:   {RETAIL_SEARCH_PROJECT_ID}")
+    print(f"Standalone Search schema:    {RETAIL_SEARCH_PG_SCHEMA}")
+    print(f"User:                        {user_email}")
+    if APP_URL:
+        print(f"Lab App: {APP_URL}")

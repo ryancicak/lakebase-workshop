@@ -1,38 +1,61 @@
 # Branch per change
 
-Copy-on-write database branches, used the way a pull request would use them. One notebook, about 45 minutes
-hands-on, plus an optional recovery block of about three minutes.
+> Added by Ryan Cicak on 2026-11-05. Session preparation added for release 2026-11-06a.
+
+Test an index on a separate database branch, check the result, then apply the same SQL to production.
+Plan for a 60-minute block: about 45 minutes for setup and the index exercise, up to 10 minutes for optional
+recovery, and five minutes to discuss where this fits your change process.
 
 ## What to run
 
 | Order | Open this | What you'll do |
 |-------|-----------|----------------|
-| 1 | [`Branch_Per_Change.py`](Branch_Per_Change.py) | Create your own project, load a two-million-row production-shaped table, branch it in seconds, reproduce a slow lookup on the branch and fix it there with an index, prove production never moved, promote the same change, diff the two, delete the branch. Optional: an agent runs a DELETE without its store filter against production, the stores keep working, and you restore a point in time and merge only the deleted rows back, with anything newer in production winning |
+| 1 | [`Branch_Per_Change.py`](Branch_Per_Change.py) | Create your project and sample inventory, test an index on `pr-101`, confirm production is unchanged, then add the tested index to production and delete the branch. Optional: recover deleted inventory rows while keeping newer store updates |
 
 ## Prerequisites
 
-- Permission to create a Lakebase project in the workspace (every workspace user has it by default).
-- Serverless compute for the notebook. Pick **Serverless** in the compute menu, then **Run all**.
+- Permission to create a Lakebase project in the workspace.
+- Serverless compute for the notebook. Pick **Serverless**, then run **one cell at a time from the top**.
 
-There is no setup notebook to run first. The first cell creates your project (`lakebase-lab-<you>`) or reuses it.
+There is no separate setup notebook. Setup A through E install libraries and load helpers; step 1 creates
+your project (`lakebase-lab-<you>`) or reuses it. Each executable cell has a short **What**, **Why**, and **Look for**
+introduction. Pause at each result before continuing. If Python restarts, rerun Setup D and E, then restart the exercise.
+
+An existing project is reused only when its owner matches your signed-in identity. If ownership is missing or
+different, the notebook stops before changing the project.
+
+Steps 1 through 9 are the main lab. Recovery is split into five cells so the room can follow the deleted rows,
+newer work, restore, and repair. If time is short, skip all of step 10 and go to Wrap-up. This notebook demonstrates
+the database operations manually; it does not create a pull request or run GitHub Actions.
+
+## Preparing before the session
+
+The session preparation notebook can run this entire lab in serverless environment version 6, including recovery.
+It then removes the added SKU index, repair table, and extra SKU. It verifies two million inventory rows,
+the original primary key, and only the production branch remain. Your project and data stay available.
+
+This mode requires the matching release and a preparation run ID. It returns a structured result only after the
+exercise, recovery, and reset checks pass. The preparation notebook checks that result before reporting READY.
+
+During a normal cell-by-cell run, the preparation reset is skipped and your completed lab stays in place.
+Start from the top on the day so Python loads the libraries and helpers; step 2 resets the exercise as usual.
 
 ## What it creates, and what it never touches
 
 - One project named `lakebase-lab-<you>` with a one-hour idle timeout, one schema, one table (`store_inventory`), and
   short-lived branches (`pr-101`, and in the optional block `recovered`).
-- Nothing outside that project. Every cell can be re-run; step 2 resets the story (drops the promoted index, removes
-  leftover branches) so the notebook tells the same story every time.
+- `production` is a branch inside your lab project. The stores and products are made up.
+- To repeat the exercise, start at step 1 and run step 2 to reset the added index, extra SKU, and temporary branches.
 - The project stays at the end so you can run it again. The last cell, commented out, deletes it.
 
 ## Key concepts
 
-- **Copy-on-write branching**: a branch has every row instantly; nothing is copied until one side changes.
+- **Copy-on-write branching**: a new branch shares unchanged data with its source. Changes on either branch are separate.
 - **Branch per change**: the branch is where the change is proven, against the full data, before production sees it.
 - **Promotion by replaying the change**: the branch never merges into production; the same statement runs on production.
-- **Point-in-time restore**: a branch of production exactly as it was at any second in the history window. Use it two
-  ways: re-point the app at it, or copy the deleted rows out of it and merge them back into production by key with
-  anything newer in production winning, which is what the optional block does. Snapshots are the scheduled version;
-  a checkpoint branch is the manual one.
+- **Point-in-time restore**: create a separate branch at an earlier time within the available history window. The
+  optional exercise copies candidate rows from that branch and inserts only keys missing from production.
+  `ON CONFLICT DO NOTHING` keeps existing production rows. It does not compare timestamps or resolve arbitrary updates.
 
 ## Documentation
 

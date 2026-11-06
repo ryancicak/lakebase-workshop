@@ -2,19 +2,22 @@
 # MAGIC %md
 # MAGIC # Branch per change
 # MAGIC
-# MAGIC **Lakebase feature:** copy-on-write database branches, used the way a pull request would use them.
+# MAGIC > Added by Ryan Cicak on 2026-11-05. Session preparation added for release 2026-11-06a.
 # MAGIC
-# MAGIC In this notebook you will:
-# MAGIC 1. Create your own Lakebase project (usually under a minute)
-# MAGIC 2. Load a production-shaped table: 2,000 stores times 1,000 products, two million rows
-# MAGIC 3. Branch it in seconds, with no data copied
-# MAGIC 4. Reproduce a slow lookup on the branch and fix it there with an index
-# MAGIC 5. Prove production never moved
-# MAGIC 6. Promote the same change to production, diff the two, and delete the branch
-# MAGIC 7. Optional: an agent breaks production with one bad DELETE; the stores keep working; you restore a point in time and merge only the deleted rows back
+# MAGIC We want to find every store that carries one product. We'll test a SKU index on a separate database branch,
+# MAGIC check that production hasn't changed, then add the same index to production.
 # MAGIC
-# MAGIC **What this creates:** one project named `lakebase-lab-<you>`, one schema in it, one table, and short-lived branches.
-# MAGIC It never touches any other project. Every cell can be re-run; the notebook resets its own story at step 2.
+# MAGIC ```
+# MAGIC production: store_inventory  ---------------------------> add the tested index
+# MAGIC                 |                                               ^
+# MAGIC                 +--> pr-101: run lookup -> add index -> check ---+
+# MAGIC ```
+# MAGIC
+# MAGIC **How we'll run it:** choose Serverless, then run one cell at a time, from the top. We'll pause at the results.
+# MAGIC Steps 1 to 9 cover the change. Step 10 is an optional recovery exercise if we have time.
+# MAGIC
+# MAGIC **Your lab only:** `production` is the name of a branch in your own `lakebase-lab-<you>` project.
+# MAGIC All products and stores are made up. To repeat the exercise, start again at step 1, then run step 2 to reset it.
 # MAGIC
 # MAGIC **Docs:** [Branches](https://docs.databricks.com/aws/en/oltp/projects/branches) |
 # MAGIC [Manage branches](https://docs.databricks.com/aws/en/oltp/projects/manage-branches) |
@@ -22,9 +25,19 @@
 
 # COMMAND ----------
 
-# Install only what this notebook needs, and keep protobuf on the major version this environment already ships.
-# On some serverless environment versions protobuf is a core package: changing its major version stops the Python
-# restart in the next cell ("Kernel exited"). Staying on the same major version is always safe.
+# MAGIC %md
+# MAGIC ### Setup A. Choose the libraries
+# MAGIC
+# MAGIC **What:** we're building the list of Python libraries this notebook needs.
+# MAGIC
+# MAGIC **Why:** We need to manage Lakebase branches and run SQL, using libraries compatible with this notebook environment.
+# MAGIC
+# MAGIC **Look for:** A library list. No project or table is created yet.
+
+# COMMAND ----------
+
+# DBTITLE 1,Setup A. Choose the libraries
+# Prepare the library list while keeping protobuf on this environment's current major version.
 import importlib.metadata as _md
 _reqs = ["databricks-sdk>=0.81.0", "psycopg[binary]>=3.0"]
 try:
@@ -34,23 +47,73 @@ except _md.PackageNotFoundError:
     pass
 with open("/tmp/lakebase_lab_requirements.txt", "w") as _f:
     _f.write("\n".join(_reqs) + "\n")
-print("Installing: " + ", ".join(_reqs))
+print("Libraries selected: " + ", ".join(_reqs))
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Setup B. Install the libraries
+# MAGIC
+# MAGIC **What:** we're installing the libraries selected above.
+# MAGIC
+# MAGIC **Why:** The following cells use them to connect to Lakebase.
+# MAGIC
+# MAGIC **Look for:** The cell finishes without an error. Then run the restart cell below.
+
+# COMMAND ----------
+
+# DBTITLE 1,Setup B. Install the libraries
 # MAGIC %pip install --quiet -r /tmp/lakebase_lab_requirements.txt
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Setup C. Restart Python
+# MAGIC
+# MAGIC **What:** we're restarting this notebook's Python session.
+# MAGIC
+# MAGIC **Why:** Python needs to load the libraries we installed.
+# MAGIC
+# MAGIC **Look for:** The restart finishes. Run both helper cells below next, since a restart clears Python variables.
+
+# COMMAND ----------
+
+# DBTITLE 1,Setup C. Restart Python
 dbutils.library.restartPython()
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Setup D. Load the shared connection helpers
+# MAGIC
+# MAGIC **What:** we're loading the shared code that identifies your workspace user and connects to Lakebase.
+# MAGIC
+# MAGIC **Why:** Each participant needs their own project name and connections.
+# MAGIC
+# MAGIC **Look for:** A confirmation that the lab helpers loaded for your user.
+
+# COMMAND ----------
+
+# DBTITLE 1,Setup D. Load the shared connection helpers
 # MAGIC %run ../_setup
 
 # COMMAND ----------
 
-# DBTITLE 1,Helpers (run this after %run ../_setup, and again after any Python restart)
+# MAGIC %md
+# MAGIC ### Setup E. Load this lab's helpers
+# MAGIC
+# MAGIC **What:** we're defining the functions for SQL, branches, and the sample inventory table.
+# MAGIC
+# MAGIC **Why:** The exercise cells can then show the change we're testing without repeating connection code.
+# MAGIC
+# MAGIC **Look for:** Your project name and the test branch name, `pr-101`. No data changes yet.
+# MAGIC Run this cell after Setup D, including after any Python restart.
+
+# COMMAND ----------
+
+# DBTITLE 1,Setup E. Load this lab's helpers
+import json
+import re
 import time
 import psycopg
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -61,13 +124,30 @@ from databricks.sdk.service.postgres import (Branch, BranchSpec, Duration, Endpo
 
 
 def _param(name, default):
-    """Rehearsal knobs. Interactive runs use the defaults; a job can pass them as base parameters."""
+    """Notebook options. Interactive runs use defaults; a job can pass base parameters."""
     try:
         value = dbutils.widgets.get(name)
     except Exception:
         return default
     return type(default)(value) if str(value).strip() else default
 
+
+RELEASE_VERSION = "2026-11-06a"
+SESSION_ENVIRONMENT = "6"
+_prepare_requested = _param("prepare_for_session", "false").strip().lower()
+if _prepare_requested not in ("true", "false"):
+    raise RuntimeError("prepare_for_session must be true or false. Run the session preparation notebook again.")
+PREPARE_FOR_SESSION = _prepare_requested == "true"
+VALIDATION_RUN_ID = _param("validation_run_id", "").strip()
+PREPARATION_REQUEST_VALIDATED = False
+if PREPARE_FOR_SESSION:
+    if _param("release_version", "").strip() != RELEASE_VERSION:
+        raise RuntimeError("The requested session release does not match this lab. Install the matching release first.")
+    if _param("session_environment", "").strip() != SESSION_ENVIRONMENT:
+        raise RuntimeError("Session preparation must use serverless environment version 6.")
+    if not re.fullmatch(r"[0-9a-f]{8,64}", VALIDATION_RUN_ID):
+        raise RuntimeError("The preparation run ID is missing or invalid. Start a new run from the preparation notebook.")
+    PREPARATION_REQUEST_VALIDATED = True
 
 PAUSE_SECONDS = _param("pause_seconds", 0)                    # rehearsal only: sleep between steps so the compute suspends
 IDLE_TIMEOUT_SECONDS = _param("idle_timeout_seconds", 3600)   # one hour, so a pause in the room does not suspend the compute
@@ -83,6 +163,10 @@ LOOKUP_SKU = "SKU-000777"
 LOOKUP_SQL = f"SELECT store_id, on_hand, aisle FROM {TABLE} WHERE sku = %s"
 MIGRATION_SQL = f"CREATE INDEX IF NOT EXISTS {INDEX} ON {TABLE} (sku)"   # the one statement that moves forward
 TIMES = {}
+RECOVERY_STAGE = "not_started"
+PRODUCTION_ISOLATED = False
+SCHEMA_CHECKED = False
+LAB_COMPLETION_VERIFIED = False
 
 
 def stamp(key, started):
@@ -246,20 +330,30 @@ print(f"Project: {PROJECT_ID} | schema: {PG_SCHEMA} | branch for this change: {B
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1. Your project
-# MAGIC Every person gets their own project. If it already exists, it's reused. The compute gets a one-hour idle timeout,
-# MAGIC so a pause in the room doesn't suspend it. Even if it does, every cell here opens its own short connection, and
-# MAGIC the next cell simply wakes the compute.
+# MAGIC ## 1. Create your lab project
+# MAGIC
+# MAGIC **What:** we're creating your own Lakebase project, or reopening it from an earlier run.
+# MAGIC
+# MAGIC **Why:** You can change this lab's `production` branch without affecting anyone else's work.
+# MAGIC
+# MAGIC **Look for:** `Production compute ready` and a link to your project.
 
 # COMMAND ----------
 
-# DBTITLE 1,1. Your project (usually under a minute)
+# DBTITLE 1,1. Create your lab project
 if "q" not in globals() or "PROJECT_ID" not in globals():
-    raise RuntimeError("Run the two cells above the steps first: %run ../_setup and Helpers. They define this lab's "
+    raise RuntimeError("Run Setup D and Setup E first. They define this lab's "
                        "functions, and a Python restart clears them.")
 started = time.monotonic()
 try:
-    w.postgres.get_project(name=f"projects/{PROJECT_ID}")
+    existing_project = w.postgres.get_project(name=f"projects/{PROJECT_ID}")
+    existing_owner = getattr(getattr(existing_project, "status", None), "owner", None)
+    if existing_owner is None:
+        existing_owner = getattr(getattr(existing_project, "spec", None), "owner", None)
+    if not isinstance(existing_owner, str) or existing_owner.strip().casefold() != user_email.strip().casefold():
+        raise RuntimeError(
+            f"NOT READY: refusing to change {PROJECT_ID} because its owner could not be verified as your identity."
+        )
     print(f"✓ Project: reused {PROJECT_ID}")
     TIMES["project"] = "reused"
 except PermissionDenied as exc:
@@ -282,7 +376,8 @@ except NotFound:
     except PermissionDenied as exc:
         raise RuntimeError(f"NOT READY: {user_email} cannot create a Lakebase project in this workspace. "
                            "Ask a workspace admin.") from exc
-    print(f"✓ Project: created {PROJECT_ID} in {stamp('project', started)} s")
+    stamp('project', started)
+    print(f"✓ Project: created {PROJECT_ID}")
 
 wait_for_endpoint("production")
 idle = ensure_idle_timeout("production", IDLE_TIMEOUT_SECONDS)
@@ -292,19 +387,20 @@ show_view_link(f"Open {PROJECT_ID} in Lakebase", lakebase_project_url())
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. A production-shaped table
-# MAGIC One row per store per product: 2,000 stores times 1,000 products, two million rows, keyed by store and SKU.
-# MAGIC Lookups by store and SKU are fast because the primary key covers them. A lookup by SKU alone, across all stores,
-# MAGIC has no index to use. Queries like that turn into full table scans and time out as the table grows.
+# MAGIC ## 2. Load the store inventory
 # MAGIC
-# MAGIC This step also resets the story so you can run the notebook again: it drops the SKU index on production if an
-# MAGIC earlier run promoted it, and removes branches an earlier run left behind.
+# MAGIC **What:** we're creating two million made-up inventory rows: 2,000 stores with 1,000 products each.
+# MAGIC
+# MAGIC **Why:** The primary key is `(store_id, sku)`. We'll test a different lookup: one SKU across every store.
+# MAGIC
+# MAGIC **Look for:** `2,000,000 rows` and `no SKU index on production`.
+# MAGIC This also resets earlier runs by removing the added index, the extra SKU, and this exercise's temporary branches.
 
 # COMMAND ----------
 
-# DBTITLE 1,2. Production baseline (about a minute the first time)
+# DBTITLE 1,2. Load the store inventory
 if "q" not in globals() or "PROJECT_ID" not in globals():
-    raise RuntimeError("Run the two cells above the steps first: %run ../_setup and Helpers. They define this lab's "
+    raise RuntimeError("Run Setup D and Setup E first. They define this lab's "
                        "functions, and a Python restart clears them.")
 count, seconds, built = build_table("production")
 
@@ -315,27 +411,35 @@ q("production", f"DROP TABLE IF EXISTS {TABLE}_repair", fetch=False)
 q("production", f"DELETE FROM {TABLE} WHERE sku = 'SKU-001001'", fetch=False)
 removed = [b for b in (BRANCH, "qa-stable", "qa", "oops", "recovered", "checkpoint-before-change") if delete_branch_if_exists(b)]
 count = q("production", f"SELECT count(*) AS n FROM {TABLE}")[0]["n"]
-print(f"✓ Baseline: {TABLE} has {count:,} rows" + (f" (built in {seconds} s)" if built else " (already there)"))
+RECOVERY_STAGE = "not_started"
+PRODUCTION_ISOLATED = False
+SCHEMA_CHECKED = False
+LAB_COMPLETION_VERIFIED = False
+print(f"✓ Baseline: {TABLE} has {count:,} rows" + (" (loaded)" if built else " (already there)"))
 print("✓ Reset: no SKU index on production" + (f"; removed leftover branches {removed}" if removed else ""))
 show_view_link(f"See {TABLE} on production", lakebase_tables_url("production"))
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Branch it
-# MAGIC A branch is a copy-on-write child of production: it has every row, instantly, and nothing is copied until one
-# MAGIC side changes. The branch gets a 24-hour TTL so it deletes itself if you forget.
+# MAGIC ## 3. Create a branch for the index change
+# MAGIC
+# MAGIC **What:** we're creating `pr-101` from this lab's production branch.
+# MAGIC
+# MAGIC **Why:** We can test the index against the same data while keeping production separate.
+# MAGIC
+# MAGIC **Look for:** `pr-101 sees 2,000,000 rows`. Open its link to see the new branch.
+# MAGIC The branches share unchanged data. This branch expires after 24 hours if we leave it behind.
 
 # COMMAND ----------
 
-# DBTITLE 1,3. Branch it (seconds, no data copied)
+# DBTITLE 1,3. Create the test branch
 if "q" not in globals() or "PROJECT_ID" not in globals():
-    raise RuntimeError("Run the two cells above the steps first: %run ../_setup and Helpers. They define this lab's "
+    raise RuntimeError("Run Setup D and Setup E first. They define this lab's "
                        "functions, and a Python restart clears them.")
 created, ready = create_branch(BRANCH)
 TIMES["branch_create"], TIMES["branch_ready"] = created, ready
-print(f"✓ Branch {BRANCH}: created in {created} s from production ({STORES * SKUS:,} rows, nothing copied); "
-      f"its compute was ready after {ready} s")
+print(f"✓ Branch {BRANCH}: created from production; its compute is ready")
 n = q(BRANCH, f"SELECT count(*) AS n FROM {TABLE}")[0]["n"]
 print(f"✓ {BRANCH} sees {n:,} rows")
 show_view_link(f"Open branch {BRANCH} in Lakebase", lakebase_project_url(branch=BRANCH))
@@ -343,54 +447,76 @@ show_view_link(f"Open branch {BRANCH} in Lakebase", lakebase_project_url(branch=
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. The problem, reproduced on the branch
-# MAGIC "Which stores carry this SKU, and how many do they have?" Without an index on `sku`, Postgres reads all two million
-# MAGIC rows to answer it.
+# MAGIC ## 4. Find one product across all stores
+# MAGIC
+# MAGIC **What:** we're looking up `SKU-000777` on the test branch to see how Postgres reads the table.
+# MAGIC
+# MAGIC **Why:** We need to see the current query plan before deciding whether an index helps.
+# MAGIC
+# MAGIC **Look for:** `Seq Scan`, meaning Postgres scans the table. The query should return 2,000 stores.
+# MAGIC The SQL is `SELECT store_id, on_hand, aisle FROM store_inventory WHERE sku = 'SKU-000777'`.
 
 # COMMAND ----------
 
-# DBTITLE 1,4. The slow lookup, on the branch
+# DBTITLE 1,4. Find one product across all stores
 if "q" not in globals() or "PROJECT_ID" not in globals():
-    raise RuntimeError("Run the two cells above the steps first: %run ../_setup and Helpers. They define this lab's "
+    raise RuntimeError("Run Setup D and Setup E first. They define this lab's "
                        "functions, and a Python restart clears them.")
 node, ms, plan = explain(BRANCH, LOOKUP_SQL, (LOOKUP_SKU,))
 rows = q(BRANCH, LOOKUP_SQL, (LOOKUP_SKU,))
+if PREPARE_FOR_SESSION and "seq scan" not in node.casefold():
+    raise RuntimeError(f"Preparation expected a sequential scan before the index; observed {node}. Review this plan.")
 TIMES["before_ms"] = ms
-print(f"Lookup on {BRANCH} before the change: {node} | {ms:.0f} ms | {len(rows):,} stores carry {LOOKUP_SKU}")
-print("\n".join("   " + l for l in plan[:4]))
+print(f"Lookup on {BRANCH} before the change: {node}")
+print(f"Result: {len(rows):,} stores carry {LOOKUP_SKU}. Seq Scan means the table was scanned to find them.")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 5. The change, on the branch only
-# MAGIC The fix is one statement. It runs on the branch, so production is not touched, and you can see what it does
-# MAGIC against the full data before anyone else does.
+# MAGIC ## 5. Add the index on the test branch
+# MAGIC
+# MAGIC **What:** we're creating an index on `sku`, then running the same lookup on `pr-101`.
+# MAGIC
+# MAGIC **Why:** The index gives Postgres a way to find that SKU without scanning the whole table.
+# MAGIC
+# MAGIC **Look for:** An `Index` or `Bitmap` scan in place of `Seq Scan`. We haven't changed production yet.
+# MAGIC The change is `CREATE INDEX store_inventory_sku_idx ON store_inventory (sku)`.
 
 # COMMAND ----------
 
-# DBTITLE 1,5. Fix it on the branch
+# DBTITLE 1,5. Add the index on the test branch
 if "q" not in globals() or "PROJECT_ID" not in globals():
-    raise RuntimeError("Run the two cells above the steps first: %run ../_setup and Helpers. They define this lab's "
+    raise RuntimeError("Run Setup D and Setup E first. They define this lab's "
                        "functions, and a Python restart clears them.")
 started = time.monotonic()
 q(BRANCH, MIGRATION_SQL, fetch=False)
 q(BRANCH, f"ANALYZE {TABLE}", fetch=False)
-print(f"✓ Index built on {BRANCH} in {stamp('index_branch', started)} s: {MIGRATION_SQL}")
+stamp('index_branch', started)
+print(f"✓ Index built on {BRANCH}: {MIGRATION_SQL}")
 node, ms, plan = explain(BRANCH, LOOKUP_SQL, (LOOKUP_SKU,))
+if PREPARE_FOR_SESSION and not any(kind in node.casefold() for kind in ("index", "bitmap")):
+    raise RuntimeError(f"Preparation expected an index or bitmap scan on the test branch; observed {node}.")
 TIMES["after_ms"] = ms
-print(f"Lookup on {BRANCH} after the change: {node} | {ms:.1f} ms (was {TIMES['before_ms']:.0f} ms)")
+print(f"Lookup on {BRANCH} after the change: {node}")
+print("The lookup is unchanged. Postgres now has the SKU index available.")
 pause("after the change on the branch")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 6. Production never moved
+# MAGIC ## 6. Check production before changing it
+# MAGIC
+# MAGIC **What:** we're comparing each branch's indexes and running the lookup on production.
+# MAGIC
+# MAGIC **Why:** We need to confirm that testing the index didn't add it to production.
+# MAGIC
+# MAGIC **Look for:** `store_inventory_sku_idx` on `pr-101` only. Production should still use `Seq Scan`.
 
 # COMMAND ----------
 
-# DBTITLE 1,6. Production is untouched
+# DBTITLE 1,6. Check production before changing it
 if "q" not in globals() or "PROJECT_ID" not in globals():
-    raise RuntimeError("Run the two cells above the steps first: %run ../_setup and Helpers. They define this lab's "
+    raise RuntimeError("Run Setup D and Setup E first. They define this lab's "
                        "functions, and a Python restart clears them.")
 IDX_SQL = "SELECT indexname FROM pg_indexes WHERE schemaname = %s AND tablename = %s ORDER BY indexname"
 prod_idx = [r["indexname"] for r in q("production", IDX_SQL, (PG_SCHEMA, TABLE))]
@@ -399,41 +525,55 @@ node, ms, _ = explain("production", LOOKUP_SQL, (LOOKUP_SKU,))
 print(f"{BRANCH} indexes:    {branch_idx}")
 print(f"production indexes: {prod_idx}")
 assert INDEX in branch_idx and INDEX not in prod_idx, "expected the index on the branch only"
-print(f"✓ Production untouched: the lookup there is still {node} | {ms:.0f} ms")
+PRODUCTION_ISOLATED = True
+print(f"✓ Production untouched: the lookup there is still {node}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 7. Promote the change
-# MAGIC In a pull request this is the merge. You don't merge the branch's data into production; you run the same
-# MAGIC statement against production. Only the change moves forward, never the branch's rows.
+# MAGIC ## 7. Add the tested index to production
+# MAGIC
+# MAGIC **What:** we're running the same `CREATE INDEX` statement on production, then checking its lookup.
+# MAGIC
+# MAGIC **Why:** We've tested the change on the branch. Now we can apply that change to production.
+# MAGIC
+# MAGIC **Look for:** Production uses an `Index` or `Bitmap` scan too.
+# MAGIC We're doing this manually. A deployment pipeline would run the reviewed migration after approval.
 
 # COMMAND ----------
 
-# DBTITLE 1,7. Promote: the same statement, now on production
+# DBTITLE 1,7. Add the tested index to production
 if "q" not in globals() or "PROJECT_ID" not in globals():
-    raise RuntimeError("Run the two cells above the steps first: %run ../_setup and Helpers. They define this lab's "
+    raise RuntimeError("Run Setup D and Setup E first. They define this lab's "
                        "functions, and a Python restart clears them.")
 started = time.monotonic()
 q("production", MIGRATION_SQL, fetch=False)
 q("production", f"ANALYZE {TABLE}", fetch=False)
-print(f"✓ Promoted: the same statement ran on production in {stamp('index_prod', started)} s")
+stamp('index_prod', started)
+print("✓ Promoted: the same CREATE INDEX statement ran on production")
 node, ms, _ = explain("production", LOOKUP_SQL, (LOOKUP_SKU,))
+if PREPARE_FOR_SESSION and not any(kind in node.casefold() for kind in ("index", "bitmap")):
+    raise RuntimeError(f"Preparation expected an index or bitmap scan after promotion; observed {node}.")
 TIMES["prod_after_ms"] = ms
-print(f"Lookup on production after promote: {node} | {ms:.1f} ms")
+print(f"Lookup on production after promote: {node}")
 pause("after promote")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 8. Diff the two
-# MAGIC Columns and indexes on the branch versus production. After promote they should match.
+# MAGIC ## 8. Compare the table definitions
+# MAGIC
+# MAGIC **What:** we're comparing column names, types, and index names on both branches.
+# MAGIC
+# MAGIC **Why:** We want to confirm that production has the table structure we tested.
+# MAGIC
+# MAGIC **Look for:** `Schema diff: no differences`. This checks structure, not every row's contents.
 
 # COMMAND ----------
 
-# DBTITLE 1,8. Schema diff
+# DBTITLE 1,8. Compare the table definitions
 if "q" not in globals() or "PROJECT_ID" not in globals():
-    raise RuntimeError("Run the two cells above the steps first: %run ../_setup and Helpers. They define this lab's "
+    raise RuntimeError("Run Setup D and Setup E first. They define this lab's "
                        "functions, and a Python restart clears them.")
 def schema_of(branch):
     cols = q(branch, "SELECT column_name, data_type FROM information_schema.columns "
@@ -447,19 +587,26 @@ print(f"{BRANCH}:    {len(on_branch['columns'])} columns, indexes {on_branch['in
 print(f"production: {len(on_prod['columns'])} columns, indexes {on_prod['indexes']}")
 if on_branch == on_prod:
     print("✓ Schema diff: no differences")
+    SCHEMA_CHECKED = True
 else:
-    print(f"✗ Schema diff: {set(on_branch['indexes']) ^ set(on_prod['indexes'])}")
+    raise RuntimeError("The table definitions differ. Compare the columns and indexes before continuing.")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 9. The change merged. The branch goes away.
+# MAGIC ## 9. Delete the test branch
+# MAGIC
+# MAGIC **What:** we're deleting `pr-101` now that production has the index.
+# MAGIC
+# MAGIC **Why:** The test branch has finished its job. We can remove its compute and branch resources.
+# MAGIC
+# MAGIC **Look for:** The remaining branch list contains `production`.
 
 # COMMAND ----------
 
 # DBTITLE 1,9. Delete the branch
 if "q" not in globals() or "PROJECT_ID" not in globals():
-    raise RuntimeError("Run the two cells above the steps first: %run ../_setup and Helpers. They define this lab's "
+    raise RuntimeError("Run Setup D and Setup E first. They define this lab's "
                        "functions, and a Python restart clears them.")
 delete_branch_if_exists(BRANCH)
 print(f"✓ Branch {BRANCH} deleted; branches now: {branch_ids()}")
@@ -467,7 +614,8 @@ print(f"✓ Branch {BRANCH} deleted; branches now: {branch_ids()}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### What this maps to in a pull request
+# MAGIC ### Where this fits in your pull request process
+# MAGIC We ran these steps by hand. Your CI/CD pipeline would call the same operations around a reviewed migration file.
 # MAGIC
 # MAGIC | In the pull request | In Lakebase |
 # MAGIC |---|---|
@@ -477,69 +625,41 @@ print(f"✓ Branch {BRANCH} deleted; branches now: {branch_ids()}")
 # MAGIC | Merge | Replay the same migration file against the stable branch, then production |
 # MAGIC | Close the PR | Delete the branch |
 # MAGIC
-# MAGIC The branch never crosses into production. The migration file does. On a synced table, `CREATE INDEX` is an
-# MAGIC allowed operation too, so this is the same move for a table that Databricks keeps in sync for you.
+# MAGIC Promotion here means running the reviewed SQL against production. Lakebase does not merge the branch's data for us.
+# MAGIC This exercise uses a native Postgres table. Adding an index is also supported on synced tables; their data refresh
+# MAGIC remains a separate process.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 10. Optional: an agent breaks production, you fix it from a point in time
-# MAGIC
-# MAGIC Here's the one that matters, so let me make the problem dead simple.
-# MAGIC
-# MAGIC **What happened.** Someone asked an agent to clear the zero-stock rows for one store. It ran this against production,
-# MAGIC with no store filter:
-# MAGIC
-# MAGIC ```sql
-# MAGIC DELETE FROM store_inventory WHERE on_hand = 0;
-# MAGIC ```
-# MAGIC
-# MAGIC About 20,000 store-and-SKU rows are gone, across every store.
-# MAGIC
-# MAGIC **What it looks like.** Nothing crashed. The app keeps answering. For 20,000 items it now says "not carried here."
-# MAGIC And the stores keep working: a restock lands, a new SKU rolls out, somebody re-lists one of the items the agent
-# MAGIC deleted. The damage and the day's real work are now mixed together in the same table.
-# MAGIC
-# MAGIC **What you want.** The deleted rows back, without losing anything the stores did since.
-# MAGIC
-# MAGIC Point-in-time restore gives you production as it was at any second in the history window, as a new branch. There
-# MAGIC are two ways to use it:
-# MAGIC
-# MAGIC - **Re-point** the app at the recovered branch. Fast, and right when production is trashed. Wrong here: you'd throw
-# MAGIC   away the restock, the new SKU, and the re-list.
-# MAGIC - **Repair in place.** Pull the deleted rows out of the recovered branch and merge them back into production by
-# MAGIC   primary key, with one rule: anything newer in production wins. Same endpoint, nobody reconnects, the day's work
-# MAGIC   survives. That's what this cell does.
+# MAGIC ## 10. Optional: recover deleted rows without losing newer work
+# MAGIC An agent is asked to remove zero-stock rows for one store. It leaves out the store filter and deletes those rows
+# MAGIC from every store. Meanwhile, stores keep updating inventory. We'll recover the missing rows and keep those updates.
 # MAGIC
 # MAGIC ```
-# MAGIC time ----------------------------------------------------------------------------------------->
-# MAGIC
-# MAGIC production  [2,000,000] . t0 . [agent DELETE] . [restock, new SKU, re-list] . [merge back] . [2,000,001]
-# MAGIC                               |                                                   ^
-# MAGIC                               '-- recovered (production as of t0) ----------------'
-# MAGIC                                   the ~20,000 deleted rows come from here; production's newer rows win
+# MAGIC production:  record time -> bad DELETE -> stores update inventory -> repair missing rows
+# MAGIC                   |                                                        ^
+# MAGIC                   +--> recovered: production at the recorded time ---------+
 # MAGIC ```
 # MAGIC
-# MAGIC How the repair knows what to put back: the agent's statement is in the query history, so its predicate (`on_hand = 0`)
-# MAGIC picks the candidate rows out of `recovered`. Then `INSERT ... ON CONFLICT DO NOTHING` on the primary key does the
-# MAGIC rest: a row that still exists in production, including one the store re-listed after the damage, is left alone.
+# MAGIC Run 10a through 10e in order. If we're short on time, skip the entire section and go to Wrap-up.
 # MAGIC
-# MAGIC | Row | At t0 | After the agent | The day goes on | After the repair |
-# MAGIC |---|---|---|---|---|
-# MAGIC | A zero-stock row at some store | present | deleted | | back, from `recovered` |
-# MAGIC | A zero-stock row the store re-listed | present, 0 on hand | deleted | re-inserted, 5 on hand | kept at 5; production is newer |
-# MAGIC | Store 42's restock on 3 SKUs | present | present | on_hand + 12 | untouched |
-# MAGIC | A brand-new SKU at store 42 | didn't exist | | inserted | untouched |
+# MAGIC ### 10a. Record the healthy state
 # MAGIC
-# MAGIC Snapshots are the scheduled version of the same restore. A checkpoint branch, one you create before a risky change,
-# MAGIC is the manual version.
+# MAGIC **What:** we're recording production's row count and the database time before the mistake.
+# MAGIC
+# MAGIC **Why:** We'll use that time to create a recovery branch containing the rows we're about to delete.
+# MAGIC
+# MAGIC **Look for:** `2,000,000 rows` and the time in UTC. Nothing has been deleted yet.
 
 # COMMAND ----------
 
-# DBTITLE 1,10. Optional: an agent breaks production, you fix it from a point in time (about three minutes)
+# DBTITLE 1,10a. Record the healthy state
 if "q" not in globals() or "PROJECT_ID" not in globals():
-    raise RuntimeError("Run the two cells above the steps first: %run ../_setup and Helpers. They define this lab's "
+    raise RuntimeError("Run Setup D and Setup E first. They define this lab's "
                        "functions, and a Python restart clears them.")
+if RECOVERY_STAGE != "not_started":
+    raise RuntimeError("Recovery has already started. Continue with the next recovery cell, or restart at step 2.")
 RECOVERED = "recovered"
 AGENT_SQL = f"DELETE FROM {TABLE} WHERE on_hand = 0"   # the store filter the agent was asked for is missing
 REPAIR_TABLE = f"{TABLE}_repair"
@@ -568,13 +688,50 @@ t0 = q("production", "SELECT now() AS t")[0]["t"]
 watched = q("production", f"SELECT store_id, sku FROM {TABLE} WHERE on_hand = 0 ORDER BY store_id, sku LIMIT 1")[0]
 print(f"✓ Production at {t0:%H:%M:%S} UTC: {rows0:,} rows; {stores0:,} stores carry {LOOKUP_SKU}")
 time.sleep(5)  # a few seconds of history between healthy and damaged, so the restore point is unambiguous
+RECOVERY_STAGE = "recorded"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 10b. Run the agent's bad DELETE
+# MAGIC
+# MAGIC **What:** we're deleting every zero-stock row from this lab's production branch.
+# MAGIC
+# MAGIC **Why:** The missing store filter turns a one-store cleanup into a mistake across all stores.
+# MAGIC
+# MAGIC **Look for:** The row count drops. The table still answers queries, but the deleted store-and-SKU records are missing.
+# MAGIC The mistake is `DELETE FROM store_inventory WHERE on_hand = 0`, with no `store_id` condition.
+
+# COMMAND ----------
+
+# DBTITLE 1,10b. Run the bad DELETE in your lab project
+if globals().get("RECOVERY_STAGE") != "recorded":
+    raise RuntimeError("Run 10a first, then 10b through 10e in order. To repeat recovery, restart at step 2.")
 
 # 2. The agent's statement, against production.
 q("production", AGENT_SQL, fetch=False)
 rows1, stores1 = health("production")
 deleted = rows0 - rows1
 print(f"✗ After the agent's DELETE: {rows1:,} rows ({deleted:,} gone); {stores1:,} stores carry {LOOKUP_SKU}. "
-      "Nothing crashed. The app is wrong.")
+      "The query succeeds, but inventory rows are missing.")
+RECOVERY_STAGE = "deleted"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 10c. Keep the stores working
+# MAGIC
+# MAGIC **What:** we're restocking three products, adding a new SKU, and re-listing one deleted item with five on hand.
+# MAGIC
+# MAGIC **Why:** A repair must keep this newer work. Replacing production with the earlier state would lose it.
+# MAGIC
+# MAGIC **Look for:** Three kinds of updates. The re-listed item is the conflict we'll check after the repair.
+
+# COMMAND ----------
+
+# DBTITLE 1,10c. Add the stores' newer inventory changes
+if globals().get("RECOVERY_STAGE") != "deleted":
+    raise RuntimeError("Run 10b first. To repeat recovery, restart at step 2.")
 
 # 3. The day goes on. Stores keep working against production, and none of this may be lost in the repair.
 q("production", f"UPDATE {TABLE} SET on_hand = on_hand + 12, updated_at = now() WHERE store_id = %s AND sku IN "
@@ -587,15 +744,55 @@ q("production", f"INSERT INTO {TABLE} (store_id, sku, on_hand, price_cents, aisl
                 "ON CONFLICT (store_id, sku) DO UPDATE SET on_hand = EXCLUDED.on_hand, updated_at = now()",
   (watched["store_id"], watched["sku"]), fetch=False)
 print(f"✓ The day goes on: store {BUSY_STORE} restocked 3 SKUs, rolled out {NEW_SKU}, and store {watched['store_id']} "
-      f"re-listed {watched['sku']} with 5 on hand (one of the deleted rows, now newer than the backup)")
+      f"re-listed {watched['sku']} with 5 on hand (one of the deleted rows, updated after the restore point)")
+RECOVERY_STAGE = "newer_work"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 10d. Restore the earlier state to a separate branch
+# MAGIC
+# MAGIC **What:** we're creating `recovered` from production at the time we recorded in 10a.
+# MAGIC
+# MAGIC **Why:** It gives us the deleted rows to inspect while production keeps its newer updates.
+# MAGIC
+# MAGIC **Look for:** `recovered` has the original two million rows. Production has not been replaced.
+# MAGIC This uses point-in-time restore within the project's available history window.
+
+# COMMAND ----------
+
+# DBTITLE 1,10d. Create the point-in-time recovery branch
+if globals().get("RECOVERY_STAGE") != "newer_work":
+    raise RuntimeError("Run 10c first. To repeat recovery, restart at step 2.")
 
 # 4. Point-in-time restore: production exactly as it was at t0, as a new branch.
 r_created, r_ready = create_branch(RECOVERED, source="production", at=t0)
 rows_r, stores_r = health(RECOVERED)
-print(f"✓ {RECOVERED}: production as of {t0:%H:%M:%S} UTC, created in {r_created} s, ready after {r_ready} s: "
+print(f"✓ {RECOVERED}: production as of {t0:%H:%M:%S} UTC: "
       f"{rows_r:,} rows; {stores_r:,} stores carry {LOOKUP_SKU}")
+RECOVERY_STAGE = "restored"
 
-# 5. Repair: the deleted rows, copied out of recovered and merged back by primary key. Anything newer in production wins.
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 10e. Put back the missing rows
+# MAGIC
+# MAGIC **What:** we're copying the old zero-stock rows into a staging table, then inserting only the keys missing from production.
+# MAGIC
+# MAGIC **Why:** `ON CONFLICT DO NOTHING` leaves any existing `(store_id, sku)` row alone, including the re-listed item.
+# MAGIC
+# MAGIC **Look for:** Missing rows return, the re-listed item stays at five, and store 42 keeps its restock and new SKU.
+# MAGIC
+# MAGIC We know the DELETE's exact condition in this exercise. In an incident, confirm which rows were deleted before
+# MAGIC repairing them. This rule keeps existing production rows; it does not compare timestamps or resolve arbitrary updates.
+
+# COMMAND ----------
+
+# DBTITLE 1,10e. Repair missing rows and verify the newer work
+if globals().get("RECOVERY_STAGE") != "restored":
+    raise RuntimeError("Run 10d first. To repeat recovery, restart at step 2.")
+
+# 5. Repair: copy candidate rows from recovered, then insert only keys missing from production.
 started = time.monotonic()
 q("production", f"DROP TABLE IF EXISTS {REPAIR_TABLE}", fetch=False)
 q("production", f"CREATE TABLE {REPAIR_TABLE} (LIKE {TABLE} INCLUDING DEFAULTS)", fetch=False)
@@ -610,34 +807,123 @@ q("production", f"DROP TABLE {REPAIR_TABLE}", fetch=False)
 rows2, stores2 = health("production")
 kept = q("production", f"SELECT on_hand FROM {TABLE} WHERE store_id = %s AND sku = %s", (watched["store_id"], watched["sku"]))[0]["on_hand"]
 newer = q("production", f"SELECT count(*) AS n FROM {TABLE} WHERE store_id = %s AND updated_at > %s", (BUSY_STORE, t0))[0]["n"]
-print(f"✓ Repaired production from {RECOVERED} in {stamp('repair', started)} s: {candidates:,} candidate rows, {len(merged):,} put back, "
-      f"{candidates - len(merged):,} skipped because production had a newer version")
-print(f"✓ Production now: {rows2:,} rows; {stores2:,} stores carry {LOOKUP_SKU}; store {watched['store_id']} still shows {kept} on hand "
-      f"for {watched['sku']}; store {BUSY_STORE} keeps its {newer} newer rows ({NEW_SKU} included). Same endpoint the whole time.")
+stamp('repair', started)
+assert rows_r == rows0 and rows2 == rows0 + 1, "The repaired row count does not match the expected inventory."
+assert candidates - len(merged) == 1 and kept == 5, "The re-listed item was not preserved as expected."
+assert newer == 4, "Store 42's three restocks and new SKU were not all preserved."
+print(f"✓ Repaired production from {RECOVERED}: {len(merged):,} rows put back; {rows2:,} rows now.")
+print(f"✓ Re-listed item preserved: store {watched['store_id']}, {watched['sku']} stays at {kept} on hand "
+      f"({candidates - len(merged):,} existing key skipped).")
+print(f"✓ Newer work preserved: store {BUSY_STORE} keeps three restocks and {NEW_SKU} ({newer} newer rows).")
 
 delete_branch_if_exists(RECOVERED)
 print(f"✓ Cleaned up: branches now {branch_ids()}")
+RECOVERY_STAGE = "repaired"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Wrap-up
+# MAGIC
+# MAGIC **What:** we're checking that production has the index and the temporary branches are gone.
+# MAGIC
+# MAGIC **Why:** We should finish with a tested change on production and no unfinished recovery exercise.
+# MAGIC
+# MAGIC **Look for:** `Branch per change: DONE`. The project stays available for another run.
+# MAGIC We tested an index on a separate branch, then applied the same SQL to production. Where would that fit your review process?
 
 # COMMAND ----------
 
 # DBTITLE 1,Wrap-up
 if "q" not in globals() or "PROJECT_ID" not in globals():
-    raise RuntimeError("Run the two cells above the steps first: %run ../_setup and Helpers. They define this lab's "
+    raise RuntimeError("Run Setup D and Setup E first. They define this lab's "
                        "functions, and a Python restart clears them.")
-summary = (f"Branch per change: DONE | {PROJECT_ID} | rows {STORES * SKUS:,} | branch in {TIMES.get('branch_create')} s"
-           f" | lookup before {TIMES.get('before_ms', 0):.0f} ms, after {TIMES.get('after_ms', 0):.1f} ms"
-           f" | index on branch {TIMES.get('index_branch')} s, on production {TIMES.get('index_prod')} s"
-           f" | branches now {branch_ids()}")
+if not {"before_ms", "after_ms", "prod_after_ms"}.issubset(TIMES) or not PRODUCTION_ISOLATED or not SCHEMA_CHECKED:
+    raise RuntimeError("The branching exercise is incomplete. Finish steps 1 through 9 before wrapping up.")
+remaining = branch_ids()
+final_indexes = [r["indexname"] for r in q("production", IDX_SQL, (PG_SCHEMA, TABLE))]
+if INDEX not in final_indexes or BRANCH in remaining:
+    raise RuntimeError("The branching exercise is incomplete. Finish steps 1 through 9 before wrapping up.")
+if RECOVERY_STAGE not in ("not_started", "repaired") or "recovered" in remaining:
+    raise RuntimeError("Recovery is incomplete. Finish 10a through 10e, or reset the exercise at step 2.")
+summary = (f"Branch per change: DONE | {PROJECT_ID} | SKU index on production | branches now {remaining}"
+           f" | recovery {'verified' if RECOVERY_STAGE == 'repaired' else 'skipped'}")
 print(summary)
+LAB_COMPLETION_VERIFIED = True
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Leave the lab ready for the session
+# MAGIC
+# MAGIC **What:** when the preparation notebook runs this lab, we remove the added index and extra SKU after all checks pass.
+# MAGIC
+# MAGIC **Why:** the project and inventory stay available, with the index exercise ready to repeat in the room.
+# MAGIC
+# MAGIC **Look for:** the preparation run confirms two million rows, the original primary key, and no test branches.
+# MAGIC When you're presenting this notebook yourself, this cell skips the reset and leaves your completed work in place.
+
+# COMMAND ----------
+
+# DBTITLE 1,Leave the lab ready for the session
+if "PREPARE_FOR_SESSION" not in globals():
+    raise RuntimeError("Run the setup and exercise cells first.")
+if not PREPARE_FOR_SESSION:
+    print("Preparation reset skipped. Your completed lab stays available.")
+else:
+    if not PREPARATION_REQUEST_VALIDATED or not LAB_COMPLETION_VERIFIED or RECOVERY_STAGE != "repaired":
+        raise RuntimeError("Session preparation requires the complete lab, including recovery and Wrap-up, to pass.")
+    if branch_ids() != ["production"]:
+        raise RuntimeError("Unexpected branches remain. Review them before preparing this project for the session.")
+
+    q("production", f"DROP INDEX IF EXISTS {INDEX}", fetch=False)
+    q("production", f"DROP TABLE IF EXISTS {TABLE}_repair", fetch=False)
+    q("production", f"DELETE FROM {TABLE} WHERE sku = 'SKU-001001'", fetch=False)
+
+    prepared_rows = q("production", f"SELECT count(*) AS n FROM {TABLE}")[0]["n"]
+    prepared_indexes = [r["indexname"] for r in q("production", IDX_SQL, (PG_SCHEMA, TABLE))]
+    primary_keys = q(
+        "production",
+        "SELECT count(*) AS n FROM pg_constraint c "
+        "JOIN pg_class t ON t.oid = c.conrelid "
+        "JOIN pg_namespace n ON n.oid = t.relnamespace "
+        "WHERE n.nspname = %s AND t.relname = %s AND c.contype = 'p'",
+        (PG_SCHEMA, TABLE),
+    )[0]["n"]
+    if prepared_rows != STORES * SKUS or primary_keys != 1 or INDEX in prepared_indexes:
+        raise RuntimeError("The starting inventory state did not pass its checks. Run preparation again from the top.")
+    if branch_ids() != ["production"]:
+        raise RuntimeError("A branch appeared during preparation. Run again when this lab is not being used elsewhere.")
+
+    print("✓ Session preparation: two million rows, primary key present, added index removed, production branch only.")
+    dbutils.notebook.exit(json.dumps({
+        "status": "PASSED",
+        "lab": "branch",
+        "release_version": RELEASE_VERSION,
+        "user": user_email,
+        "project_id": PROJECT_ID,
+        "schema": PG_SCHEMA,
+        "validation_run_id": VALIDATION_RUN_ID,
+        "session_environment": SESSION_ENVIRONMENT,
+        "prepared": True,
+        "checks": ["isolation", "index", "schema", "recovery", "reset"],
+    }))
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Clean up (optional)
-# MAGIC The branches are gone. The project stays so you can run the notebook again. To remove it entirely, uncomment and run:
+# MAGIC
+# MAGIC **What:** this optional cell deletes your entire lab project when you no longer need it.
+# MAGIC
+# MAGIC **Why:** This removes the remaining lab data and compute resources.
+# MAGIC
+# MAGIC **Look for:** The cell is commented out, so running it as written does nothing. To delete the project,
+# MAGIC uncomment its two lines and run it. You can create the lab again by starting from the top.
 
 # COMMAND ----------
 
-# UNCOMMENT TO DELETE YOUR PROJECT:
+# DBTITLE 1,Optional. Delete your lab project
+# Uncomment these two lines only when you're finished with this project.
 # w.postgres.delete_project(name=f"projects/{PROJECT_ID}", purge=True).wait()
 # print(f"✓ Project {PROJECT_ID} deleted")
