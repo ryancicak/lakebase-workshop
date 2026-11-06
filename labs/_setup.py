@@ -1,6 +1,6 @@
 # Databricks notebook source
-# Modified by Ryan Cicak, 2026-11-06: standalone lab setup and presentation updates.
 # MAGIC %md
+# MAGIC <!-- Modified by Ryan Cicak, 2026-11-06: standalone lab setup and presentation updates. -->
 # MAGIC # Lab Setup (shared)
 # MAGIC This notebook is `%run` by each lab to provide common utilities.
 # MAGIC **Do not run this notebook directly.**

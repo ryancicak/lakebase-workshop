@@ -51,7 +51,7 @@ The table-build cell resets the lab's two tables. The restock cell returns the s
 
 ## Advance setup
 
-Release `2026-11-06a` supports a full preparation run from the session setup notebook. That job supplies `prepare_for_session=true`, the matching `release_version`, a `validation_run_id`, and `session_environment=6`, and runs on environment version 6. The lab checks those parameters before opening a project.
+Release `2026-11-06c` supports a full preparation run from the session setup notebook. That job supplies `prepare_for_session=true`, the matching `release_version`, a `validation_run_id`, and `session_environment=6`, and runs on environment version 6. The lab checks those parameters before opening a project.
 
 Preparation requires all eight exercises, including step 4b. Its final cell verifies 24 products, 48 inventory rows, and Pine Junction's NorthPeak stock reset to zero, then returns a structured result. The project and data stay available for the session. In an interactive run, that reporting cell is skipped and the normal lab behavior stays the same.
 

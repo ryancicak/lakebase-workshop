@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # Branch per change
 # MAGIC
-# MAGIC > Added by Ryan Cicak on 2026-11-05. Session preparation added for release 2026-11-06b.
+# MAGIC > Added by Ryan Cicak on 2026-11-05. Session preparation added for release 2026-11-06c.
 # MAGIC
 # MAGIC We want to find every store that carries one product. We'll test a SKU index on a separate database branch,
 # MAGIC check that production hasn't changed, then add the same index to production.
@@ -132,7 +132,7 @@ def _param(name, default):
     return type(default)(value) if str(value).strip() else default
 
 
-RELEASE_VERSION = "2026-11-06b"
+RELEASE_VERSION = "2026-11-06c"
 SESSION_ENVIRONMENT = "6"
 _prepare_requested = _param("prepare_for_session", "false").strip().lower()
 if _prepare_requested not in ("true", "false"):

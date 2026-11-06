@@ -2,7 +2,7 @@
 
 > **Modification notice:** Added by Ryan Cicak on 2026-10-13 as a fictional, store-aware retail search lab.
 
-## Preparation support: release 2026-11-06a
+## Preparation support: release 2026-11-06c
 
 The READY notebook downloads this release's exact source files and runs both main labs under
 the participant's identity on serverless environment version 6. In preparation mode, this

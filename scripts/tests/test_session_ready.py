@@ -93,6 +93,7 @@ class Jobs:
         self.world = world
         self.submissions = []
         self.runs = {}
+        self.task_submissions = {}
         self.output_ids = []
         self.cancelled = []
 
@@ -118,6 +119,11 @@ class Jobs:
             tasks = []
         if self.world.get('duplicate_task') == lab:
             tasks *= 2
+        if lab in self.world.get('task_attempts', {}):
+            tasks = [obj(task_key=lab, attempt_number=attempt, run_id=task_id, state=obj(result_state=status))
+                     for attempt, task_id, status in self.world['task_attempts'][lab]]
+        for task in tasks:
+            self.task_submissions[task.run_id] = submission
         return obj(
             run_page_url=f'https://workspace.example.test/run/{run_id}',
             state=obj(life_cycle_state=lifecycle, result_state=result, state_message='injected failure'),
@@ -128,7 +134,7 @@ class Jobs:
         self.output_ids.append(run_id)
         if run_id < 1000:
             raise AssertionError('Parent output requested instead of notebook task output')
-        submission = self.runs[run_id - 1000]
+        submission = self.task_submissions[run_id]
         task = submission['tasks'][0]
         lab = task.task_key
         receipt = valid_receipt(self.n, lab, submission['run_as'].user_name,
@@ -160,6 +166,22 @@ def valid_receipt(namespace, lab='branch', user=USER, run_id=RUN_ID):
         'checks': sorted(namespace['LABS'][lab]['checks']),
         'project_id': f'lab-{lab}-participant', 'schema': 'lab_participant',
     }
+
+
+class NotebookFormatTests(unittest.TestCase):
+    def test_all_shipped_notebooks_import_first_cell_as_markdown(self):
+        paths = ('labs/session-preflight/Session_Preflight.py', 'labs/_setup.py',
+                 'labs/branch-per-change/Branch_Per_Change.py',
+                 'labs/retail-search-context/Retail_Search_Context.py')
+        for relative in paths:
+            with self.subTest(notebook=relative):
+                first_cell = (ROOT / relative).read_text().split('# COMMAND ----------', 1)[0]
+                lines = [line for line in first_cell.splitlines() if line.strip()]
+                self.assertEqual(lines[0], '# Databricks notebook source')
+                self.assertEqual(lines[1], '# MAGIC %md',
+                                 'Plain comments before %md cause Databricks to import this as Python')
+                self.assertTrue(all(line == '# MAGIC' or line.startswith('# MAGIC ') for line in lines[1:]),
+                                'Every content line in the first markdown cell must carry the MAGIC prefix')
 
 
 @unittest.skipUnless(SDK_AVAILABLE, 'Install databricks-sdk>=0.81.0 to run READY behavior tests')
@@ -384,6 +406,22 @@ class ReadyTests(unittest.TestCase):
         self.prepare(should_fail=True)
         self.assertEqual(len(self.jobs.submissions), 2)
         self.assertEqual(len(self.workspace.deletes), 1)
+
+    def test_successful_retry_reads_only_latest_notebook_attempt(self):
+        self.world['task_attempts'] = {'branch': [(1, 2101, 'SUCCESS'), (0, 1101, 'FAILED')]}
+        self.prepare()
+        self.assertEqual(self.jobs.output_ids, [2101, 1102])
+
+    def test_failed_latest_attempt_cannot_reuse_earlier_success(self):
+        self.world['task_attempts'] = {'branch': [(0, 1101, 'SUCCESS'), (1, 2101, 'FAILED')]}
+        self.prepare(should_fail=True)
+        self.assertEqual(self.jobs.output_ids, [])
+        self.assertEqual(len(self.jobs.submissions), 1)
+
+    def test_ambiguous_latest_attempt_blocks_ready(self):
+        self.world['task_attempts'] = {'branch': [(1, 2101, 'SUCCESS'), (1, 3101, 'SUCCESS')]}
+        self.prepare(should_fail=True)
+        self.assertEqual(self.jobs.output_ids, [])
 
     def test_receipt_rejects_stale_wrong_or_partial_results(self):
         changes = {

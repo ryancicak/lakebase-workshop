@@ -1,6 +1,6 @@
 # Branch per change
 
-> Added by Ryan Cicak on 2026-11-05. Session preparation added for release 2026-11-06a.
+> Added by Ryan Cicak on 2026-11-05. Session preparation added for release 2026-11-06c.
 
 Test an index on a separate database branch, check the result, then apply the same SQL to production.
 Plan for a 60-minute block: about 45 minutes for setup and the index exercise, up to 10 minutes for optional

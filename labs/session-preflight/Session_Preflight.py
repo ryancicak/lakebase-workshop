@@ -1,6 +1,6 @@
 # Databricks notebook source
-# Modified by Ryan Cicak, 2026-11-06: verified downloads, complete lab runs, and preparation checks.
 # MAGIC %md
+# MAGIC <!-- Modified by Ryan Cicak, 2026-11-06: verified downloads, complete lab runs, and preparation checks. -->
 # MAGIC # Get your two labs ready
 # MAGIC
 # MAGIC Run this before the session, signed in as the person who will do the exercises. Choose **Serverless**, with **Standard version 6** in the Environment panel, then **Run all**.
@@ -102,15 +102,15 @@ from databricks.sdk.service.compute import Environment
 from databricks.sdk.service.jobs import JobEnvironment, JobRunAs, NotebookTask, SubmitTask
 from databricks.sdk.service.workspace import ImportFormat, Language
 
-KIT_VERSION = "2026-11-06b"
-RELEASE_TAG = "retail-session-2026-11-06b"
+KIT_VERSION = "2026-11-06c"
+RELEASE_TAG = "retail-session-2026-11-06c"
 SESSION_ENVIRONMENT = "6"
 SOURCE_BASE = f"https://raw.githubusercontent.com/ryancicak/lakebase-workshop/{RELEASE_TAG}/"
 # These fingerprints are filled from the exact release files before packaging.
 SOURCES = {
-    'labs/_setup.py': '5d66c015e16c7082f5f1408b29be53ec8ad8f796c08669b7eeb0d2c98182947d',
-    'labs/branch-per-change/Branch_Per_Change.py': 'aad95c90d19d049e1c94945bd832fe877613ce1c0d79630eec044433b70b5954',
-    'labs/retail-search-context/Retail_Search_Context.py': '406389c6a4a999fac8956d72e2e631734f8467798b903d8a4bb8443622066adc',
+    'labs/_setup.py': '5b2e750083662d685b8e4cd567c4df17ac07fdf15be2e91383ff8c767e4599c9',
+    'labs/branch-per-change/Branch_Per_Change.py': '88b0410fbdada7a38f0030cf797601d8432993027d52ea252a1dffff48557263',
+    'labs/retail-search-context/Retail_Search_Context.py': 'ab22b45ec9d0a948aab53e0d9d953896bdc4f93bf1f7c49db96e3576724918bd',
 }
 LABS = {
     "branch": {
@@ -271,8 +271,16 @@ def run_lab(w, lab, path, user, run_id, state, timeout_seconds=2400, project_suf
                 detail = getattr(current.state, "state_message", "") or result
                 raise RuntimeError(f"{label} failed: {detail}. Open {link}")
             tasks = [t for t in (current.tasks or []) if t.task_key == lab]
-            if len(tasks) != 1 or tasks[0].run_id is None:
+            if not tasks:
                 raise RuntimeError(f"{label} is missing its notebook task result. Open {link}")
+            if len(tasks) > 1:
+                attempts = [getattr(t, "attempt_number", None) for t in tasks]
+                if not all(type(attempt) is int and attempt >= 0 for attempt in attempts):
+                    raise RuntimeError(f"{label} has ambiguous notebook task attempts. Open {link}")
+                latest_attempt = max(attempts)
+                tasks = [t for t in tasks if t.attempt_number == latest_attempt]
+            if len(tasks) != 1 or tasks[0].run_id is None:
+                raise RuntimeError(f"{label} has no unique latest notebook task result. Open {link}")
             completed = tasks[0]
             if enum_text(getattr(completed.state, "result_state", None)) != "SUCCESS":
                 raise RuntimeError(f"{label}'s notebook task didn't succeed. Open {link}")
