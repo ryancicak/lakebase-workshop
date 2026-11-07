@@ -3,26 +3,26 @@
 # MAGIC <!-- Modified by Ryan Cicak, 2026-11-06: verified downloads, complete lab runs, and preparation checks. -->
 # MAGIC # Get your two labs ready
 # MAGIC
-# MAGIC Run this before the session, signed in as the person who will do the exercises. Choose **Serverless**, with **Standard version 6** in the Environment panel, then **Run all**.
+# MAGIC Run this before the session, signed in as the person who'll do the exercises. Pick **Serverless**, set **Standard version 6** in the Environment panel, and click **Run all**.
 # MAGIC
-# MAGIC We'll download the session versions, run both complete labs as you, and leave your lab projects ready to use. That includes the branching recovery exercise and all eight Search checks.
+# MAGIC What it does: it downloads the session versions of both labs, runs each one end to end as you, and leaves your two lab projects loaded and ready. That includes the branching recovery exercise and all eight Search checks, so if anything in your workspace is going to get in the way, we find out now and not in the room.
 # MAGIC
-# MAGIC **READY means:** both notebooks ran successfully, their results passed, and their starting data was checked. You'll get links to the notebooks to open on the day.
+# MAGIC **READY means** both notebooks ran, their results passed, and their starting data checked out. You'll get links to the two notebooks to open on the day.
 # MAGIC
-# MAGIC This creates a new folder under your home folder and two one-time job runs. Each lab creates or reuses its own project. Those projects and their data stay afterward, with a one-hour idle timeout. The exercises change only their lab data. The optional project-move lab isn't part of this check.
+# MAGIC A few things to know. It creates a new folder under your home folder and two one-time job runs. Each lab creates its own Lakebase project (or reuses it), and those projects and their data stay afterward with a one-hour idle timeout. The exercises change only their own lab data. The optional project-move lab isn't part of this.
 # MAGIC
-# MAGIC Run one preparation at a time per person. Don't work in these lab projects while this is running. Different people can prepare at the same time.
+# MAGIC Run one preparation at a time per person, and don't work in the lab projects while it's running. Different people can run it at the same time.
 # MAGIC
-# MAGIC If something fails, keep the error and job link. A failed or incomplete check won't print READY. This tests execution; your instructor still rehearses the explanation and pacing.
+# MAGIC If something fails, keep the error and the job link and send them to your Databricks contact. A failed or partial check won't print READY. One more thing: this proves the labs run in your workspace; it doesn't replace the walkthrough we'll do together.
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 1. Choose the libraries
 # MAGIC
-# MAGIC **What:** we're preparing the Python library list.
+# MAGIC **What:** this cell writes the Python library list: the Databricks client, and protobuf kept on your environment's current major version.
 # MAGIC
-# MAGIC **Why:** the notebook needs the Databricks client. We keep protobuf on the environment's current major version to avoid replacing a core package.
+# MAGIC **Why:** we've seen an install replace a core package and kill the notebook. Pinning protobuf to what you already have avoids that.
 # MAGIC
 # MAGIC **Look for:** the selected libraries. The next cell installs them.
 
@@ -46,11 +46,11 @@ print("Libraries selected: " + ", ".join(_reqs))
 # MAGIC %md
 # MAGIC ### Install the libraries
 # MAGIC
-# MAGIC **What:** we're installing the client selected above.
+# MAGIC **What:** `%pip install` from that list.
 # MAGIC
-# MAGIC **Why:** it downloads notebooks into your workspace and starts the lab checks.
+# MAGIC **Why:** the client is what downloads the notebooks into your workspace and starts the lab runs.
 # MAGIC
-# MAGIC **Look for:** the cell finishes successfully, then continue to the restart.
+# MAGIC **Look for:** it finishes cleanly. Then run the restart.
 
 # COMMAND ----------
 
@@ -62,9 +62,9 @@ print("Libraries selected: " + ", ".join(_reqs))
 # MAGIC %md
 # MAGIC ### Restart Python
 # MAGIC
-# MAGIC **What:** we're restarting Python to load the installed client.
+# MAGIC **What:** we restart Python so it loads the client we installed.
 # MAGIC
-# MAGIC **Why:** the running session can still have the earlier version loaded.
+# MAGIC **Why:** the running session still has the earlier version loaded.
 # MAGIC
 # MAGIC **Look for:** the restart completes. Then run the remaining cells in order.
 
@@ -78,11 +78,11 @@ dbutils.library.restartPython()
 # MAGIC %md
 # MAGIC ## 2. Load the preparation steps
 # MAGIC
-# MAGIC **What:** we're loading the download, execution, and result checks.
+# MAGIC **What:** this defines the download, run, and result checks. It doesn't run anything yet.
 # MAGIC
-# MAGIC **Why:** both labs must use the session version and pass under your identity. A completed job alone isn't enough; each lab must also confirm its data is ready for another run.
+# MAGIC **Why:** both labs have to use the session version and pass under your identity. A job that finished isn't enough; each lab also has to confirm its data is ready for another run.
 # MAGIC
-# MAGIC **Look for:** the release and environment version. This cell defines the steps; the next one runs them.
+# MAGIC **Look for:** the release and environment version. The next cell runs the steps.
 
 # COMMAND ----------
 
@@ -102,15 +102,15 @@ from databricks.sdk.service.compute import Environment
 from databricks.sdk.service.jobs import JobEnvironment, JobRunAs, NotebookTask, SubmitTask
 from databricks.sdk.service.workspace import ImportFormat, Language
 
-KIT_VERSION = "2026-11-06c"
-RELEASE_TAG = "retail-session-2026-11-06c"
+KIT_VERSION = "2026-11-06d"
+RELEASE_TAG = "retail-session-2026-11-06d"
 SESSION_ENVIRONMENT = "6"
 SOURCE_BASE = f"https://raw.githubusercontent.com/ryancicak/lakebase-workshop/{RELEASE_TAG}/"
 # These fingerprints are filled from the exact release files before packaging.
 SOURCES = {
     'labs/_setup.py': '5b2e750083662d685b8e4cd567c4df17ac07fdf15be2e91383ff8c767e4599c9',
-    'labs/branch-per-change/Branch_Per_Change.py': '88b0410fbdada7a38f0030cf797601d8432993027d52ea252a1dffff48557263',
-    'labs/retail-search-context/Retail_Search_Context.py': 'ab22b45ec9d0a948aab53e0d9d953896bdc4f93bf1f7c49db96e3576724918bd',
+    'labs/branch-per-change/Branch_Per_Change.py': 'd1eb7484b438dab5c899744499283d29ce7e8b4ac19c47733782a198c1b4b324',
+    'labs/retail-search-context/Retail_Search_Context.py': 'c3e2e0c73d52fd1d07e0861ae11d997dc1928195ffa6d8834de966bd68023072',
 }
 LABS = {
     "branch": {
@@ -386,11 +386,11 @@ print(f"Preparation steps loaded. Release {KIT_VERSION}; serverless environment 
 # MAGIC %md
 # MAGIC ## 3. Download, run, and prepare both labs
 # MAGIC
-# MAGIC **What:** we're downloading the verified files, running both labs as you, and checking their starting data.
+# MAGIC **What:** download the verified files, run both labs as you, check their results and starting data.
 # MAGIC
-# MAGIC **Why:** we want to find setup and execution problems before everyone is in the room. The job links show progress and any error.
+# MAGIC **Why:** I'd rather find a setup or permission problem now than with everyone watching. The job links show progress and any error.
 # MAGIC
-# MAGIC **Look for:** READY, both notebook links, and the line to copy back. The projects stay available for the session. If you see NOT READY, send the error and job link to your contact.
+# MAGIC **Look for:** READY, both notebook links, and the line to copy back to us. The projects stay for the session. If you see NOT READY, send the error and the job link to your contact.
 
 # COMMAND ----------
 
