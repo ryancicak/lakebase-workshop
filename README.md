@@ -1,8 +1,50 @@
-# Lakebase Workshop
+# Lakebase labs: start here
+
+Prepare the **branching** and **retail Search** labs before the customer-driven session. Run one notebook, check the result, and keep the two lab links for the day.
+
+Each hands-on person runs it as themselves in the workspace we'll use together.
+
+## Run START_HERE
+
+1. In Databricks, open **Workspace**, go to your home folder, and choose **Import**.
+2. Choose **URL**, paste the link below, and click **Import**.
+
+   ```text
+   https://raw.githubusercontent.com/ryancicak/lakebase-workshop/main/START_HERE.py
+   ```
+
+3. Open **START_HERE**. Choose **Serverless**, select **Standard environment version 6**, and click **Run all**.
+4. Wait for **READY**. Send your Databricks contact the final report, and keep both notebook links for the session. If a check fails, send the error and job link.
+
+[View the START_HERE notebook](START_HERE.py) · [Download the notebook](https://raw.githubusercontent.com/ryancicak/lakebase-workshop/main/START_HERE.py)
+
+If you've already added this repository as a Databricks Git folder, open **START_HERE** at the top of the default `main` branch and start at step 3.
+
+## What it checks
+
+The notebook downloads the session's fixed lab versions, verifies the files, and runs both complete labs under your identity:
+
+- **Branching:** test an index on a branch, check production stayed unchanged, apply the tested SQL, and recover from a bad DELETE in the lab project.
+- **Retail Search:** run all eight answer checks, including exact IDs, store stock, no matches, and a restock.
+
+It then checks and resets the starting data. **READY means both labs passed and their projects are prepared.** The report gives you the notebook links to open on the day. Run those notebooks from the top, one cell at a time with the group.
+
+## Before you run it
+
+You'll need access to serverless notebooks and jobs, permission to create Lakebase projects and use Search, and network access to GitHub and the Python package downloads. A failed check stops preparation and shows the error.
+
+Run one preparation at a time per person. Leave those lab projects alone while it runs. The two projects and their fictional data remain afterward and can incur charges until deleted. Search is enabled only in its dedicated lab project.
+
+This path needs no laptop setup. The other examples below have their own setup instructions.
+
+<details>
+<summary>Other examples in this repository</summary>
+
+The instructions below apply to the other examples. For the two session labs, use START_HERE above.
 
 A hands-on workshop for exploring **Databricks Lakebase** -- a fully managed PostgreSQL database that runs inside your Databricks workspace.
 
-> **It's all one Lakebase now.** Databricks has unified its managed Postgres under a single **Lakebase** offering (the earlier "Provisioned" instances were upgraded to the unified platform by Jul 31, 2026). You'll still see **"Autoscaling"** in doc URLs and the SDK (`w.postgres.*`, the `oltp/projects` surface) — that's the API surface this workshop is built on.
+> **It's all one Lakebase now.** Databricks has unified its managed Postgres under a single **Lakebase** offering (the earlier "Provisioned" instances were upgraded to the unified platform by Jul 31, 2026). You'll still see **"Autoscaling"** in doc URLs and the SDK (`w.postgres.*`, the `oltp/projects` surface): that's the API surface this workshop is built on.
 
 ## Quick Start
 
@@ -38,7 +80,7 @@ Before you begin, make sure you have:
 - **Your own Databricks workspace** with Lakebase enabled
 - **Python 3.11+** on your computer (`python3 --version`)
 - **Databricks CLI ≥ 0.294.0**, logged in via `databricks auth login` (do this ahead of time)
-- **Node.js 18+** — only needed if you deploy the **Lab Console app**. `setup.sh` installs it for you (Homebrew, nvm, or apt) when you choose option 2. You can also install it ahead of time (`node --version`). Not needed for the notebook labs.
+- **Node.js 18+**: only needed if you deploy the **Lab Console app**. `setup.sh` installs it for you (Homebrew, nvm, or apt) when you choose option 2. You can also install it ahead of time (`node --version`). Not needed for the notebook labs.
 
 Share this with participants ahead of time: **[Prerequisites Guide](docs/PREREQUISITES.md)** (GitHub access, bring-your-own workspace, and auth login).
 
@@ -102,8 +144,8 @@ The setup notebook (Step 2 above) automatically grants the app access to your da
 | Opening the app shows `{"detail":"Not Found"}` | You're on an older deployment whose UI was never built. Re-run `bash setup.sh`, choose **option 2**, and accept the Node.js install when prompted. Current builds show an explanatory page instead. |
 | Opening the app shows "the app is running, but its user interface was not deployed" | The app was deployed without a frontend build. Re-run `bash setup.sh` → **option 2** (setup installs Node.js if needed). The notebook labs are unaffected. |
 | Lab Console shows "Project Not Found" | You haven't run the setup notebook yet. Go back to Step 2. |
-| `function databricks_create_role(...) does not exist` | The `databricks_auth` extension isn't installed in your Postgres database. Run `CREATE EXTENSION IF NOT EXISTS databricks_auth;` once per database — the setup notebook now does this automatically in Step 6. |
-| Deploying the app errors with "No endpoints" before running the setup notebook | Re-run `bash setup.sh` and choose **option 2** — the script auto-creates your Lakebase project before deploying the app. If auto-create fails, run `00_Setup_Lakebase_Project` and re-run setup. |
+| `function databricks_create_role(...) does not exist` | The `databricks_auth` extension isn't installed in your Postgres database. Run `CREATE EXTENSION IF NOT EXISTS databricks_auth;` once per database: the setup notebook now does this automatically in Step 6. |
+| Deploying the app errors with "No endpoints" before running the setup notebook | Re-run `bash setup.sh` and choose **option 2**: the script auto-creates your Lakebase project before deploying the app. If auto-create fails, run `00_Setup_Lakebase_Project` and re-run setup. |
 
 ## Resources
 
@@ -111,7 +153,7 @@ The setup notebook (Step 2 above) automatically grants the app access to your da
 - [What is Lakebase?](https://docs.databricks.com/aws/en/oltp/projects/about)
 - [Lakebase documentation (hub)](https://docs.databricks.com/aws/en/oltp/projects/)
 - [Get started with Lakebase](https://docs.databricks.com/aws/en/oltp/projects/get-started)
-- [June 2026 release notes](https://docs.databricks.com/aws/en/release-notes/product/2026/june) — latest launches & changes
+- [June 2026 release notes](https://docs.databricks.com/aws/en/release-notes/product/2026/june): latest launches & changes
 
 **Feature docs (mapped to the labs):**
 - [Authentication](https://docs.databricks.com/aws/en/oltp/projects/authentication) · [Roles & permissions](https://docs.databricks.com/aws/en/oltp/projects/roles-permissions) · [Private Link](https://docs.databricks.com/aws/en/oltp/projects/private-link)
@@ -132,3 +174,7 @@ If you're running this workshop for a group, see the [Facilitator Guide](docs/WO
 ## License
 
 See [LICENSE.md](LICENSE.md).
+
+</details>
+
+[License](LICENSE.md)
