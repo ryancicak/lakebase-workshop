@@ -2,22 +2,21 @@
 # MAGIC %md
 # MAGIC # Branch per change
 # MAGIC
-# MAGIC > Added by Ryan Cicak on 2026-11-05. Session preparation added for release 2026-11-06c.
+# MAGIC > Added by Ryan Cicak on 2026-11-05. Session preparation and wording revised 2026-11-06 (release 2026-11-06d).
 # MAGIC
-# MAGIC We want to find every store that carries one product. We'll test a SKU index on a separate database branch,
-# MAGIC check that production hasn't changed, then add the same index to production.
+# MAGIC The question for this hour: how do you test a database change without touching production? In Lakebase the answer is a branch. You get a copy of production in seconds (nothing is copied; the branch shares the data), you make the change there, you check it, and then you run the same SQL on production.
+# MAGIC
+# MAGIC The change we'll test is small on purpose: an index for a lookup that today scans a two-million-row table.
 # MAGIC
 # MAGIC ```
-# MAGIC production: store_inventory  ---------------------------> add the tested index
+# MAGIC production: store_inventory  ---------------------------> run the tested CREATE INDEX
 # MAGIC                 |                                               ^
 # MAGIC                 +--> pr-101: run lookup -> add index -> check ---+
 # MAGIC ```
 # MAGIC
-# MAGIC **How we'll run it:** choose Serverless, then run one cell at a time, from the top. We'll pause at the results.
-# MAGIC Steps 1 to 9 cover the change. Step 10 is an optional recovery exercise if we have time.
+# MAGIC **How we'll run it:** Serverless, one cell at a time, from the top. I'll stop at the results so you can see what changed. Steps 1 to 9 are the change. Step 10 is the part I like most, a recovery exercise, if we have time.
 # MAGIC
-# MAGIC **Your lab only:** `production` is the name of a branch in your own `lakebase-lab-<you>` project.
-# MAGIC All products and stores are made up. To repeat the exercise, start again at step 1, then run step 2 to reset it.
+# MAGIC **Your lab, your project:** `production` here is a branch in your own `lakebase-lab-<you>` project. Every store and product is made up. To run it again later, start at step 1; step 2 resets everything.
 # MAGIC
 # MAGIC **Docs:** [Branches](https://docs.databricks.com/aws/en/oltp/projects/branches) |
 # MAGIC [Manage branches](https://docs.databricks.com/aws/en/oltp/projects/manage-branches) |
@@ -28,11 +27,11 @@
 # MAGIC %md
 # MAGIC ### Setup A. Choose the libraries
 # MAGIC
-# MAGIC **What:** we're building the list of Python libraries this notebook needs.
+# MAGIC **What:** this cell writes the list of Python libraries the notebook needs: the Databricks client and a Postgres driver.
 # MAGIC
-# MAGIC **Why:** We need to manage Lakebase branches and run SQL, using libraries compatible with this notebook environment.
+# MAGIC **Why:** the one thing I want to avoid is a library install that breaks the notebook environment. So we keep protobuf on whatever major version your environment already has, and let everything else resolve around it.
 # MAGIC
-# MAGIC **Look for:** A library list. No project or table is created yet.
+# MAGIC **Look for:** the list it prints. Nothing is created yet.
 
 # COMMAND ----------
 
@@ -54,11 +53,11 @@ print("Libraries selected: " + ", ".join(_reqs))
 # MAGIC %md
 # MAGIC ### Setup B. Install the libraries
 # MAGIC
-# MAGIC **What:** we're installing the libraries selected above.
+# MAGIC **What:** `%pip install` from that list.
 # MAGIC
-# MAGIC **Why:** The following cells use them to connect to Lakebase.
+# MAGIC **Why:** the next cells use these libraries to talk to Lakebase and run SQL.
 # MAGIC
-# MAGIC **Look for:** The cell finishes without an error. Then run the restart cell below.
+# MAGIC **Look for:** it finishes with no red text. Then run the restart cell.
 
 # COMMAND ----------
 
@@ -70,11 +69,11 @@ print("Libraries selected: " + ", ".join(_reqs))
 # MAGIC %md
 # MAGIC ### Setup C. Restart Python
 # MAGIC
-# MAGIC **What:** we're restarting this notebook's Python session.
+# MAGIC **What:** we restart the notebook's Python so it picks up what we installed.
 # MAGIC
-# MAGIC **Why:** Python needs to load the libraries we installed.
+# MAGIC **Why:** the running session still has the older versions loaded. A restart is the clean way to swap them.
 # MAGIC
-# MAGIC **Look for:** The restart finishes. Run both helper cells below next, since a restart clears Python variables.
+# MAGIC **Look for:** the restart finishes. One catch: a restart clears every Python variable, so run both helper cells below again after any restart.
 
 # COMMAND ----------
 
@@ -86,11 +85,11 @@ dbutils.library.restartPython()
 # MAGIC %md
 # MAGIC ### Setup D. Load the shared connection helpers
 # MAGIC
-# MAGIC **What:** we're loading the shared code that identifies your workspace user and connects to Lakebase.
+# MAGIC **What:** `%run ../_setup` loads the shared code that figures out who you are and how to connect to Lakebase.
 # MAGIC
-# MAGIC **Why:** Each participant needs their own project name and connections.
+# MAGIC **Why:** everyone in the room gets their own project name and their own connections from this one line.
 # MAGIC
-# MAGIC **Look for:** A confirmation that the lab helpers loaded for your user.
+# MAGIC **Look for:** `Lab helpers loaded for <your email>`.
 
 # COMMAND ----------
 
@@ -102,12 +101,11 @@ dbutils.library.restartPython()
 # MAGIC %md
 # MAGIC ### Setup E. Load this lab's helpers
 # MAGIC
-# MAGIC **What:** we're defining the functions for SQL, branches, and the sample inventory table.
+# MAGIC **What:** this defines the functions for running SQL, creating and deleting branches, and building the sample inventory table.
 # MAGIC
-# MAGIC **Why:** The exercise cells can then show the change we're testing without repeating connection code.
+# MAGIC **Why:** with the plumbing in one place, every exercise cell shows the one thing we're testing. Each SQL call opens a fresh connection, so if a compute went idle while we were talking, the next cell wakes it up on its own.
 # MAGIC
-# MAGIC **Look for:** Your project name and the test branch name, `pr-101`. No data changes yet.
-# MAGIC Run this cell after Setup D, including after any Python restart.
+# MAGIC **Look for:** your project name and the branch name `pr-101`. No data changes yet. Run this after Setup D, and again after any Python restart.
 
 # COMMAND ----------
 
@@ -132,7 +130,7 @@ def _param(name, default):
     return type(default)(value) if str(value).strip() else default
 
 
-RELEASE_VERSION = "2026-11-06c"
+RELEASE_VERSION = "2026-11-06d"
 SESSION_ENVIRONMENT = "6"
 _prepare_requested = _param("prepare_for_session", "false").strip().lower()
 if _prepare_requested not in ("true", "false"):
@@ -332,11 +330,11 @@ print(f"Project: {PROJECT_ID} | schema: {PG_SCHEMA} | branch for this change: {B
 # MAGIC %md
 # MAGIC ## 1. Create your lab project
 # MAGIC
-# MAGIC **What:** we're creating your own Lakebase project, or reopening it from an earlier run.
+# MAGIC **What:** we create your own Lakebase project (`lakebase-lab-<you>`), or reopen it if you ran this before.
 # MAGIC
-# MAGIC **Why:** You can change this lab's `production` branch without affecting anyone else's work.
+# MAGIC **Why:** you'll change this project's `production` branch in a minute. It's yours, so nobody else's work is in the way.
 # MAGIC
-# MAGIC **Look for:** `Production compute ready` and a link to your project.
+# MAGIC **Look for:** `Production compute ready` and a link to the project. Usually under a minute.
 
 # COMMAND ----------
 
@@ -389,12 +387,11 @@ show_view_link(f"Open {PROJECT_ID} in Lakebase", lakebase_project_url())
 # MAGIC %md
 # MAGIC ## 2. Load the store inventory
 # MAGIC
-# MAGIC **What:** we're creating two million made-up inventory rows: 2,000 stores with 1,000 products each.
+# MAGIC **What:** two million made-up inventory rows: 2,000 stores times 1,000 products.
 # MAGIC
-# MAGIC **Why:** The primary key is `(store_id, sku)`. We'll test a different lookup: one SKU across every store.
+# MAGIC **Why:** the primary key is `(store_id, sku)`, so finding one store's row is fast. The lookup we care about goes the other way: one SKU across every store. That's the one with no index today.
 # MAGIC
-# MAGIC **Look for:** `2,000,000 rows` and `no SKU index on production`.
-# MAGIC This also resets earlier runs by removing the added index, the extra SKU, and this exercise's temporary branches.
+# MAGIC **Look for:** `2,000,000 rows` and `no SKU index on production`. This cell also resets earlier runs (it drops the index we'll add, the extra SKU from step 10, and any leftover branches), so you can repeat the lab anytime.
 
 # COMMAND ----------
 
@@ -424,12 +421,11 @@ show_view_link(f"See {TABLE} on production", lakebase_tables_url("production"))
 # MAGIC %md
 # MAGIC ## 3. Create a branch for the index change
 # MAGIC
-# MAGIC **What:** we're creating `pr-101` from this lab's production branch.
+# MAGIC **What:** we create `pr-101` from this lab's production branch.
 # MAGIC
-# MAGIC **Why:** We can test the index against the same data while keeping production separate.
+# MAGIC **Why:** this is the branch-per-change idea. If you open a pull request, you get a branch with production's data to test against, and production doesn't know you're there.
 # MAGIC
-# MAGIC **Look for:** `pr-101 sees 2,000,000 rows`. Open its link to see the new branch.
-# MAGIC The branches share unchanged data. This branch expires after 24 hours if we leave it behind.
+# MAGIC **Look for:** `pr-101 sees 2,000,000 rows`, a few seconds after we asked for it. Nothing was copied; the branch shares the unchanged pages with production. It expires after 24 hours if we forget about it.
 
 # COMMAND ----------
 
@@ -449,12 +445,11 @@ show_view_link(f"Open branch {BRANCH} in Lakebase", lakebase_project_url(branch=
 # MAGIC %md
 # MAGIC ## 4. Find one product across all stores
 # MAGIC
-# MAGIC **What:** we're looking up `SKU-000777` on the test branch to see how Postgres reads the table.
+# MAGIC **What:** on the test branch, we run `SELECT store_id, on_hand, aisle FROM store_inventory WHERE sku = 'SKU-000777'` and ask Postgres how it did it.
 # MAGIC
-# MAGIC **Why:** We need to see the current query plan before deciding whether an index helps.
+# MAGIC **Why:** before you add an index, look at the plan. If Postgres is already using one, you're done.
 # MAGIC
-# MAGIC **Look for:** `Seq Scan`, meaning Postgres scans the table. The query should return 2,000 stores.
-# MAGIC The SQL is `SELECT store_id, on_hand, aisle FROM store_inventory WHERE sku = 'SKU-000777'`.
+# MAGIC **Look for:** `Seq Scan` and the milliseconds. Seq Scan means Postgres read all two million rows to find 2,000 of them. That number comes from your lab project on a synthetic table, so treat it as a before-and-after, not a production figure.
 
 # COMMAND ----------
 
@@ -467,20 +462,19 @@ rows = q(BRANCH, LOOKUP_SQL, (LOOKUP_SKU,))
 if PREPARE_FOR_SESSION and "seq scan" not in node.casefold():
     raise RuntimeError(f"Preparation expected a sequential scan before the index; observed {node}. Review this plan.")
 TIMES["before_ms"] = ms
-print(f"Lookup on {BRANCH} before the change: {node}")
-print(f"Result: {len(rows):,} stores carry {LOOKUP_SKU}. Seq Scan means the table was scanned to find them.")
+print(f"Lookup on {BRANCH} before the change: {node}, {ms:.0f} ms")
+print(f"Result: {len(rows):,} stores carry {LOOKUP_SKU}. Seq Scan means Postgres read all two million rows to find them.")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 5. Add the index on the test branch
 # MAGIC
-# MAGIC **What:** we're creating an index on `sku`, then running the same lookup on `pr-101`.
+# MAGIC **What:** `CREATE INDEX store_inventory_sku_idx ON store_inventory (sku)` on `pr-101`, then the same lookup again.
 # MAGIC
-# MAGIC **Why:** The index gives Postgres a way to find that SKU without scanning the whole table.
+# MAGIC **Why:** the index gives Postgres a direct path to one SKU instead of a scan. We're testing it where a mistake costs nothing.
 # MAGIC
-# MAGIC **Look for:** An `Index` or `Bitmap` scan in place of `Seq Scan`. We haven't changed production yet.
-# MAGIC The change is `CREATE INDEX store_inventory_sku_idx ON store_inventory (sku)`.
+# MAGIC **Look for:** the plan flips to an `Index` or `Bitmap` scan and the milliseconds drop. Same SQL, new plan. Production hasn't changed yet. (If you're wondering whether that's true, that's the next cell.)
 
 # COMMAND ----------
 
@@ -497,8 +491,9 @@ node, ms, plan = explain(BRANCH, LOOKUP_SQL, (LOOKUP_SKU,))
 if PREPARE_FOR_SESSION and not any(kind in node.casefold() for kind in ("index", "bitmap")):
     raise RuntimeError(f"Preparation expected an index or bitmap scan on the test branch; observed {node}.")
 TIMES["after_ms"] = ms
-print(f"Lookup on {BRANCH} after the change: {node}")
-print("The lookup is unchanged. Postgres now has the SKU index available.")
+before_ms = TIMES.get("before_ms")
+print(f"Lookup on {BRANCH} after the change: {node}, {ms:.1f} ms" + (f" (was {before_ms:.0f} ms)" if before_ms else ""))
+print("Same SQL, new plan. Postgres took the index instead of scanning the table.")
 pause("after the change on the branch")
 
 # COMMAND ----------
@@ -506,11 +501,11 @@ pause("after the change on the branch")
 # MAGIC %md
 # MAGIC ## 6. Check production before changing it
 # MAGIC
-# MAGIC **What:** we're comparing each branch's indexes and running the lookup on production.
+# MAGIC **What:** we list the indexes on both branches and run the lookup on production.
 # MAGIC
-# MAGIC **Why:** We need to confirm that testing the index didn't add it to production.
+# MAGIC **Why:** I want you to see this with your own eyes: the index exists on `pr-101` only. Testing on a branch left production alone.
 # MAGIC
-# MAGIC **Look for:** `store_inventory_sku_idx` on `pr-101` only. Production should still use `Seq Scan`.
+# MAGIC **Look for:** `store_inventory_sku_idx` in the branch list, not in production's, and production still on `Seq Scan`.
 
 # COMMAND ----------
 
@@ -526,19 +521,18 @@ print(f"{BRANCH} indexes:    {branch_idx}")
 print(f"production indexes: {prod_idx}")
 assert INDEX in branch_idx and INDEX not in prod_idx, "expected the index on the branch only"
 PRODUCTION_ISOLATED = True
-print(f"✓ Production untouched: the lookup there is still {node}")
+print(f"✓ Production untouched: the lookup there is still {node}, {ms:.0f} ms")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 7. Add the tested index to production
 # MAGIC
-# MAGIC **What:** we're running the same `CREATE INDEX` statement on production, then checking its lookup.
+# MAGIC **What:** the same `CREATE INDEX` statement, now on production, then the lookup one more time.
 # MAGIC
-# MAGIC **Why:** We've tested the change on the branch. Now we can apply that change to production.
+# MAGIC **Why:** this is the promote step. Lakebase doesn't merge a branch back for you, and you don't want it to: you want the reviewed SQL to run on production, which is what a deployment pipeline would do after approval. We're doing it by hand so you can see it.
 # MAGIC
-# MAGIC **Look for:** Production uses an `Index` or `Bitmap` scan too.
-# MAGIC We're doing this manually. A deployment pipeline would run the reviewed migration after approval.
+# MAGIC **Look for:** production on an `Index` or `Bitmap` scan, with the same drop in milliseconds you saw on the branch.
 
 # COMMAND ----------
 
@@ -555,7 +549,7 @@ node, ms, _ = explain("production", LOOKUP_SQL, (LOOKUP_SKU,))
 if PREPARE_FOR_SESSION and not any(kind in node.casefold() for kind in ("index", "bitmap")):
     raise RuntimeError(f"Preparation expected an index or bitmap scan after promotion; observed {node}.")
 TIMES["prod_after_ms"] = ms
-print(f"Lookup on production after promote: {node}")
+print(f"Lookup on production after promote: {node}, {ms:.1f} ms")
 pause("after promote")
 
 # COMMAND ----------
@@ -563,11 +557,11 @@ pause("after promote")
 # MAGIC %md
 # MAGIC ## 8. Compare the table definitions
 # MAGIC
-# MAGIC **What:** we're comparing column names, types, and index names on both branches.
+# MAGIC **What:** column names, types, and index names on both branches, side by side.
 # MAGIC
-# MAGIC **Why:** We want to confirm that production has the table structure we tested.
+# MAGIC **Why:** after a promote, the question is "did production end up with what we tested?" This answers it.
 # MAGIC
-# MAGIC **Look for:** `Schema diff: no differences`. This checks structure, not every row's contents.
+# MAGIC **Look for:** `Schema diff: no differences`. This compares structure, not row contents.
 
 # COMMAND ----------
 
@@ -596,11 +590,11 @@ else:
 # MAGIC %md
 # MAGIC ## 9. Delete the test branch
 # MAGIC
-# MAGIC **What:** we're deleting `pr-101` now that production has the index.
+# MAGIC **What:** we delete `pr-101`.
 # MAGIC
-# MAGIC **Why:** The test branch has finished its job. We can remove its compute and branch resources.
+# MAGIC **Why:** the branch did its job. Deleting it drops its compute and its copy-on-write pages. In a pull request flow this happens when the PR closes.
 # MAGIC
-# MAGIC **Look for:** The remaining branch list contains `production`.
+# MAGIC **Look for:** the remaining branch list: `['production']`.
 
 # COMMAND ----------
 
@@ -615,42 +609,43 @@ print(f"✓ Branch {BRANCH} deleted; branches now: {branch_ids()}")
 
 # MAGIC %md
 # MAGIC ### Where this fits in your pull request process
-# MAGIC We ran these steps by hand. Your CI/CD pipeline would call the same operations around a reviewed migration file.
+# MAGIC
+# MAGIC We did these steps by hand. The big thing is that a pipeline would call the same operations around a migration file that someone reviewed.
 # MAGIC
 # MAGIC | In the pull request | In Lakebase |
 # MAGIC |---|---|
 # MAGIC | Open the PR | Create a branch from the stable branch, with a TTL |
 # MAGIC | CI runs the migration and the tests | Run the migration file against the branch; query it |
 # MAGIC | Review | Schema diff between the branch and the stable branch |
-# MAGIC | Merge | Replay the same migration file against the stable branch, then production |
+# MAGIC | Merge | Run the same migration file against the stable branch, then production |
 # MAGIC | Close the PR | Delete the branch |
 # MAGIC
-# MAGIC Promotion here means running the reviewed SQL against production. Lakebase does not merge the branch's data for us.
-# MAGIC This exercise uses a native Postgres table. Adding an index is also supported on synced tables; their data refresh
-# MAGIC remains a separate process.
+# MAGIC One thing to be clear about: promotion means running the reviewed SQL on production. Lakebase doesn't merge the branch's data back. This lab uses a native Postgres table; adding an index works on synced tables too, and the data refresh stays a separate process.
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 10. Optional: recover deleted rows without losing newer work
-# MAGIC An agent is asked to remove zero-stock rows for one store. It leaves out the store filter and deletes those rows
-# MAGIC from every store. Meanwhile, stores keep updating inventory. We'll recover the missing rows and keep those updates.
+# MAGIC
+# MAGIC This is the failure I think about a lot now that agents run SQL. An agent is asked to clear one store's zero-stock rows. It leaves out the store filter, so the DELETE hits every store. Nothing crashes. The app keeps answering, and the answers are wrong. Meanwhile the stores keep working, so new rows land on top of the damage.
+# MAGIC
+# MAGIC The fix has two parts: get the deleted rows back from a point in time before the mistake, and keep everything that happened after it.
 # MAGIC
 # MAGIC ```
-# MAGIC production:  record time -> bad DELETE -> stores update inventory -> repair missing rows
+# MAGIC production:  record time -> bad DELETE -> stores update inventory -> put the missing rows back
 # MAGIC                   |                                                        ^
-# MAGIC                   +--> recovered: production at the recorded time ---------+
+# MAGIC                   +--> recovered: production as of the recorded time -------+
 # MAGIC ```
 # MAGIC
-# MAGIC Run 10a through 10e in order. If we're short on time, skip the entire section and go to Wrap-up.
+# MAGIC Run 10a through 10e in order. If we're short on time, skip the whole section and go to Wrap-up. If we've started 10b, finish it.
 # MAGIC
 # MAGIC ### 10a. Record the healthy state
 # MAGIC
-# MAGIC **What:** we're recording production's row count and the database time before the mistake.
+# MAGIC **What:** we note production's row count and the database clock before anything goes wrong.
 # MAGIC
-# MAGIC **Why:** We'll use that time to create a recovery branch containing the rows we're about to delete.
+# MAGIC **Why:** that timestamp is what we'll hand to Lakebase in 10d: "give me production as of this moment."
 # MAGIC
-# MAGIC **Look for:** `2,000,000 rows` and the time in UTC. Nothing has been deleted yet.
+# MAGIC **Look for:** `2,000,000 rows` and a time in UTC. Nothing is deleted yet.
 
 # COMMAND ----------
 
@@ -695,12 +690,11 @@ RECOVERY_STAGE = "recorded"
 # MAGIC %md
 # MAGIC ### 10b. Run the agent's bad DELETE
 # MAGIC
-# MAGIC **What:** we're deleting every zero-stock row from this lab's production branch.
+# MAGIC **What:** `DELETE FROM store_inventory WHERE on_hand = 0`, with no `store_id` in it, on this lab's production branch.
 # MAGIC
-# MAGIC **Why:** The missing store filter turns a one-store cleanup into a mistake across all stores.
+# MAGIC **Why:** this is the mistake. A one-store cleanup becomes an every-store delete, about 20,000 rows, and nothing tells you.
 # MAGIC
-# MAGIC **Look for:** The row count drops. The table still answers queries, but the deleted store-and-SKU records are missing.
-# MAGIC The mistake is `DELETE FROM store_inventory WHERE on_hand = 0`, with no `store_id` condition.
+# MAGIC **Look for:** the row count drops, the lookup still works, and fewer stores "carry" SKU-000777 than a minute ago. That's the dangerous part: the database is healthy and the data is wrong.
 
 # COMMAND ----------
 
@@ -713,7 +707,7 @@ q("production", AGENT_SQL, fetch=False)
 rows1, stores1 = health("production")
 deleted = rows0 - rows1
 print(f"✗ After the agent's DELETE: {rows1:,} rows ({deleted:,} gone); {stores1:,} stores carry {LOOKUP_SKU}. "
-      "The query succeeds, but inventory rows are missing.")
+      "Nothing crashed. The app is answering with the wrong inventory.")
 RECOVERY_STAGE = "deleted"
 
 # COMMAND ----------
@@ -721,11 +715,11 @@ RECOVERY_STAGE = "deleted"
 # MAGIC %md
 # MAGIC ### 10c. Keep the stores working
 # MAGIC
-# MAGIC **What:** we're restocking three products, adding a new SKU, and re-listing one deleted item with five on hand.
+# MAGIC **What:** three real-world updates while nobody has noticed yet: store 42 restocks three products, a new SKU rolls out, and one store re-lists one of the deleted items with five on hand.
 # MAGIC
-# MAGIC **Why:** A repair must keep this newer work. Replacing production with the earlier state would lose it.
+# MAGIC **Why:** if your fix is "restore production to before the DELETE," you lose all three. The re-listed item is the tricky one, because it's a deleted row that now has a newer value.
 # MAGIC
-# MAGIC **Look for:** Three kinds of updates. The re-listed item is the conflict we'll check after the repair.
+# MAGIC **Look for:** the three updates printed. Remember the re-listed item; we'll check it after the repair.
 
 # COMMAND ----------
 
@@ -752,12 +746,11 @@ RECOVERY_STAGE = "newer_work"
 # MAGIC %md
 # MAGIC ### 10d. Restore the earlier state to a separate branch
 # MAGIC
-# MAGIC **What:** we're creating `recovered` from production at the time we recorded in 10a.
+# MAGIC **What:** we create a branch named `recovered` from production as of the time we recorded in 10a. That's point-in-time restore.
 # MAGIC
-# MAGIC **Why:** It gives us the deleted rows to inspect while production keeps its newer updates.
+# MAGIC **Why:** the nice thing is that production keeps running. We get the deleted rows back on a branch we can read from, and nobody's app is pointed at a restored copy.
 # MAGIC
-# MAGIC **Look for:** `recovered` has the original two million rows. Production has not been replaced.
-# MAGIC This uses point-in-time restore within the project's available history window.
+# MAGIC **Look for:** `recovered` has the original two million rows. Production is untouched. This works within the project's history window (seven days by default).
 
 # COMMAND ----------
 
@@ -777,14 +770,13 @@ RECOVERY_STAGE = "restored"
 # MAGIC %md
 # MAGIC ### 10e. Put back the missing rows
 # MAGIC
-# MAGIC **What:** we're copying the old zero-stock rows into a staging table, then inserting only the keys missing from production.
+# MAGIC **What:** we copy the rows the DELETE removed out of `recovered` into a staging table on production, then `INSERT ... ON CONFLICT (store_id, sku) DO NOTHING`.
 # MAGIC
-# MAGIC **Why:** `ON CONFLICT DO NOTHING` leaves any existing `(store_id, sku)` row alone, including the re-listed item.
+# MAGIC **Why:** `DO NOTHING` is the whole trick. Any `(store_id, sku)` that already exists on production is left alone, so the re-listed item keeps its five, store 42 keeps its restock, and the new SKU stays. Only the missing rows come back.
 # MAGIC
-# MAGIC **Look for:** Missing rows return, the re-listed item stays at five, and store 42 keeps its restock and new SKU.
+# MAGIC **Look for:** about 20,000 rows put back and one skipped (the re-listed item). Then the count: two million plus the new SKU.
 # MAGIC
-# MAGIC We know the DELETE's exact condition in this exercise. In an incident, confirm which rows were deleted before
-# MAGIC repairing them. This rule keeps existing production rows; it does not compare timestamps or resolve arbitrary updates.
+# MAGIC Two honest caveats. We know the DELETE's exact condition here; in a real incident you'd confirm which rows went missing first (the query history helps). And this rule keeps existing production rows as they are; it doesn't compare timestamps or merge conflicting updates.
 
 # COMMAND ----------
 
@@ -825,12 +817,13 @@ RECOVERY_STAGE = "repaired"
 # MAGIC %md
 # MAGIC ## Wrap-up
 # MAGIC
-# MAGIC **What:** we're checking that production has the index and the temporary branches are gone.
+# MAGIC **What:** one last check that production has the index and the temporary branches are gone.
 # MAGIC
-# MAGIC **Why:** We should finish with a tested change on production and no unfinished recovery exercise.
+# MAGIC **Why:** we should end with a tested change on production and nothing half-finished.
 # MAGIC
-# MAGIC **Look for:** `Branch per change: DONE`. The project stays available for another run.
-# MAGIC We tested an index on a separate branch, then applied the same SQL to production. Where would that fit your review process?
+# MAGIC **Look for:** `Branch per change: DONE`. The project stays, so you can run this again.
+# MAGIC
+# MAGIC So, where would this fit in how you review and ship database changes today? That's the conversation I want to have next.
 
 # COMMAND ----------
 
@@ -856,12 +849,11 @@ LAB_COMPLETION_VERIFIED = True
 # MAGIC %md
 # MAGIC ## Leave the lab ready for the session
 # MAGIC
-# MAGIC **What:** when the preparation notebook runs this lab, we remove the added index and extra SKU after all checks pass.
+# MAGIC **What:** when the START_HERE notebook runs this lab ahead of time, this cell removes the index and the extra SKU after everything passed.
 # MAGIC
-# MAGIC **Why:** the project and inventory stay available, with the index exercise ready to repeat in the room.
+# MAGIC **Why:** so your project is loaded and the index exercise is ready to run again in the room.
 # MAGIC
-# MAGIC **Look for:** the preparation run confirms two million rows, the original primary key, and no test branches.
-# MAGIC When you're presenting this notebook yourself, this cell skips the reset and leaves your completed work in place.
+# MAGIC **Look for:** in an advance run, it confirms two million rows, the original primary key, and no test branches. When you run the notebook yourself, this cell skips the reset and leaves your work in place.
 
 # COMMAND ----------
 
@@ -914,12 +906,11 @@ else:
 # MAGIC %md
 # MAGIC ## Clean up (optional)
 # MAGIC
-# MAGIC **What:** this optional cell deletes your entire lab project when you no longer need it.
+# MAGIC **What:** this cell deletes your whole lab project. It's commented out on purpose.
 # MAGIC
-# MAGIC **Why:** This removes the remaining lab data and compute resources.
+# MAGIC **Why:** when you're done with the lab, this removes the data and the compute so nothing keeps running.
 # MAGIC
-# MAGIC **Look for:** The cell is commented out, so running it as written does nothing. To delete the project,
-# MAGIC uncomment its two lines and run it. You can create the lab again by starting from the top.
+# MAGIC **Look for:** as written, running it does nothing. To delete the project, uncomment the two lines and run it. You can rebuild the lab anytime from the top.
 
 # COMMAND ----------
 

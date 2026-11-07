@@ -1,15 +1,16 @@
 # Databricks notebook source
-
 # MAGIC %md
 # MAGIC # Search products with store inventory
 # MAGIC
-# MAGIC A customer wants a driver for long deck screws. We'll find tools that fit, then check what's in stock at their store. We'll change the stock and see how the results change.
+# MAGIC > Added by Ryan Cicak on 2026-10-13. Presentation and advance-setup checks revised 2026-11-06 (release 2026-11-06d).
 # MAGIC
-# MAGIC We'll use two fictional stores and 24 made-up products. Each result includes the store's stock, price, and aisle.
+# MAGIC Here's the situation. A customer walks in and says: "I need a 20V impact driver for long deck screws. Tool only. Not EmberVale." The product catalog can find drivers all day. The question I care about is whether the one it recommends is on this store's shelf, in this store's lineup, right now.
 # MAGIC
-# MAGIC The customer asks: "I need a 20V impact driver for long deck screws. Tool only. Not EmberVale."
+# MAGIC Today a lot of apps do that in two trips: search the catalog, then look up stock for each result. In this lab we do it in one SQL query inside Lakebase, with the store's inventory shaping the results before anything gets ranked. Then we change one shelf count and watch the answer change.
 # MAGIC
-# MAGIC We supply the request fields and small example vectors. This notebook doesn't interpret the sentence or call an AI model. We're looking at how search and inventory work together in SQL.
+# MAGIC Two made-up stores (Pine Junction and River Bend), 24 made-up products. Every answer comes back with the store's stock, price, and aisle.
+# MAGIC
+# MAGIC One thing up front: this notebook doesn't interpret the customer's sentence or call a model. We hand it the fields (type, voltage, kit, excluded brand) and small example vectors. The point is how search and inventory work together in SQL, not how good a given embedding model is.
 # MAGIC
 # MAGIC | Step | What we'll do | Minutes |
 # MAGIC |---|---|---|
@@ -21,13 +22,11 @@
 # MAGIC | 5 | Recommend only the store's regular lineup | 10 |
 # MAGIC | 6 | Try a request nothing can satisfy | 3 |
 # MAGIC | 7 | Restock a product and search again | 8 |
-# MAGIC | 8 | Check the results and discuss a real test | 7 |
+# MAGIC | 8 | Check the results and talk about a real test | 7 |
 # MAGIC
-# MAGIC Run one cell at a time on **Serverless**. Step 4b is optional if we need five minutes back. Everything else stays in order.
+# MAGIC Serverless, one cell at a time, from the top. Step 4b is optional if we need five minutes back. Everything else stays in order.
 # MAGIC
-# MAGIC These examples show query behavior. They don't measure production search quality, speed, or cost.
-# MAGIC
-# MAGIC > Added by Ryan Cicak on 2026-10-13. Presentation and advance-setup checks revised 2026-11-06. Release 2026-11-06c.
+# MAGIC What you'll see is query behavior on a tiny synthetic catalog. It says nothing about production search quality, speed, or cost, and I won't pretend otherwise.
 
 # COMMAND ----------
 
@@ -35,11 +34,11 @@
 # MAGIC ## 0. Connect to our lab project
 # MAGIC ### Choose the library versions
 # MAGIC
-# MAGIC **What:** we're preparing the library list for this notebook.
+# MAGIC **What:** this cell writes the list of Python libraries for this notebook: the Databricks client and a Postgres driver.
 # MAGIC
-# MAGIC **Why:** it needs a Lakebase client and a Postgres driver. We keep the environment's protobuf major version to avoid the restart problem caused by replacing it.
+# MAGIC **Why:** the one thing I want to avoid is an install that breaks the environment. We keep protobuf on whatever major version your environment already has and resolve the rest around it.
 # MAGIC
-# MAGIC **Look for:** `Installing:` followed by the library list. The next cell installs it.
+# MAGIC **Look for:** `Installing:` and the list. The next cell does the install.
 
 # COMMAND ----------
 
@@ -63,11 +62,11 @@ print("Installing: " + ", ".join(_reqs))
 # MAGIC %md
 # MAGIC ### Install the libraries
 # MAGIC
-# MAGIC **What:** we're installing the libraries from the list we prepared.
+# MAGIC **What:** `%pip install` from that list.
 # MAGIC
-# MAGIC **Why:** they let Python create the lab project and query Postgres.
+# MAGIC **Why:** these let Python create the lab project and query Postgres.
 # MAGIC
-# MAGIC **Look for:** the cell finishes successfully. Then run the restart cell below.
+# MAGIC **Look for:** it finishes with no red text. Then run the restart cell.
 
 # COMMAND ----------
 
@@ -79,11 +78,11 @@ print("Installing: " + ", ".join(_reqs))
 # MAGIC %md
 # MAGIC ### Restart Python
 # MAGIC
-# MAGIC **What:** we're restarting Python so it loads the installed libraries.
+# MAGIC **What:** we restart Python so it picks up what we installed.
 # MAGIC
-# MAGIC **Why:** the running session may still have older versions loaded.
+# MAGIC **Why:** the running session still has the older versions loaded.
 # MAGIC
-# MAGIC **Look for:** the restart completes. Continue with the next cell. If you restart later, rerun the setup and exercises in order.
+# MAGIC **Look for:** the restart finishes. Keep going in order. If you restart later for any reason, rerun the setup cells and the exercises from the top.
 
 # COMMAND ----------
 
@@ -95,11 +94,11 @@ dbutils.library.restartPython()
 # MAGIC %md
 # MAGIC ### Load the shared setup
 # MAGIC
-# MAGIC **What:** we're loading the code that identifies your user and connects to Lakebase.
+# MAGIC **What:** `%run ../_setup` loads the code that figures out who you are and connects to Lakebase.
 # MAGIC
-# MAGIC **Why:** each person needs their own lab project and connection.
+# MAGIC **Why:** everyone gets their own lab project and connection from this one line.
 # MAGIC
-# MAGIC **Look for:** `Lab helpers loaded` with your user name. The next cell opens the project.
+# MAGIC **Look for:** `Lab helpers loaded for <your email>`.
 
 # COMMAND ----------
 
@@ -111,18 +110,16 @@ dbutils.library.restartPython()
 # MAGIC %md
 # MAGIC ### Create or reopen your Search project
 # MAGIC
-# MAGIC **What:** we're opening your own lab project, enabling Search, and checking the connection.
+# MAGIC **What:** we open your own lab project, turn on Lakebase Search in it, and check the connection.
 # MAGIC
-# MAGIC **Why:** enabling Search restarts compute and can't be undone. That's why each person uses a dedicated lab project.
+# MAGIC **Why:** turning Search on restarts the project's compute and can't be undone. That's why each person gets a dedicated project for this lab instead of sharing one.
 # MAGIC
-# MAGIC **Look for:** `READY`. If you see `NOT READY`, stop here and follow the instructor while we resolve it.
-# MAGIC
-# MAGIC When the session setup notebook runs this lab ahead of time, this cell also checks that it requested the right release.
+# MAGIC **Look for:** `READY`. If you see `NOT READY`, stop there and let me know; we'll sort it out before moving on. (When START_HERE runs this lab ahead of time, this cell also checks it was asked for the right release.)
 
 # COMMAND ----------
 
 # DBTITLE 1,Create or reopen your Search project
-LAB_RELEASE_VERSION = "2026-11-06c"
+LAB_RELEASE_VERSION = "2026-11-06d"
 
 
 def _session_parameter(name, default=""):
@@ -155,11 +152,11 @@ conn = prepare_retail_search_lab()
 # MAGIC %md
 # MAGIC ### Load the query and display helpers
 # MAGIC
-# MAGIC **What:** we're loading functions that run SQL, make the example vectors, and display results.
+# MAGIC **What:** functions that run SQL, build the example vectors, and print results as small tables.
 # MAGIC
-# MAGIC **Why:** the later cells can focus on the search we're testing. The vectors use fixed word groups so everyone gets the same example results.
+# MAGIC **Why:** so the exercise cells show the search we're testing and nothing else. The vectors come from fixed word groups, so everyone in the room gets the same rankings.
 # MAGIC
-# MAGIC **Look for:** `Lab helpers ready`. This cell defines functions; it doesn't load products or run a search.
+# MAGIC **Look for:** `Lab helpers ready`. This cell only defines functions; no products are loaded and no search runs.
 
 # COMMAND ----------
 
@@ -276,7 +273,7 @@ print("✓ Lab helpers ready")
 # MAGIC ## 1. Load the products and store inventory
 # MAGIC ### Prepare the example data
 # MAGIC
-# MAGIC **What:** we're putting 24 products and two stores' inventory into Python lists.
+# MAGIC **What:** 24 products and two stores' shelves, as Python lists.
 # MAGIC
 # MAGIC **Why:** everyone needs the same starting data. The next cell writes it to Lakebase.
 # MAGIC
@@ -287,7 +284,7 @@ print("✓ Lab helpers ready")
 # MAGIC Description                       Stock, price, aisle
 # MAGIC ```
 # MAGIC
-# MAGIC **Look for:** `24 products and 2 stores`. No database tables change in this cell.
+# MAGIC **Look for:** `24 products and 2 stores`. No tables change in this cell.
 
 # COMMAND ----------
 
@@ -422,13 +419,13 @@ print(f"✓ Loaded the made-up data: {len(PRODUCTS)} products and {len(STORE_NAM
 # MAGIC %md
 # MAGIC ### Build the catalog and inventory tables
 # MAGIC
-# MAGIC **What:** we're replacing this lab's two tables, loading the examples, and creating the search indexes.
+# MAGIC **What:** we rebuild this lab's two tables, load the examples, and create the search indexes (vector and keyword).
 # MAGIC
-# MAGIC **Why:** search needs the product catalog and each store's inventory in the database. Rebuilding gives us the same starting point on every run.
+# MAGIC **Why:** search needs the catalog and each store's inventory in the database, and rebuilding gives us the same starting point every run.
 # MAGIC
-# MAGIC **Look for:** 24 products and 48 inventory rows, one per product at each store. NorthPeak 10001234 is out of stock at Pine Junction.
+# MAGIC **Look for:** 24 products and 48 inventory rows (every product at both stores), plus a table of the five 20V tool-only drivers. Notice NorthPeak 10001234: zero on the shelf at Pine Junction. That one row drives most of what happens later.
 # MAGIC
-# MAGIC `CORE` means regular lineup. `EXTENDED` means carried outside that lineup. Both can have stock.
+# MAGIC `CORE` means the store's regular lineup. `EXTENDED` means the store carries it outside that lineup. Both can be in stock.
 
 # COMMAND ----------
 
@@ -565,11 +562,11 @@ assert pine_context_by_sku["10001238"]["on_hand"] > 0
 # MAGIC %md
 # MAGIC ## 2. Look up a SKU and a barcode
 # MAGIC
-# MAGIC **What:** we're looking up NorthPeak 10001234 at Pine Junction, first by SKU, then by barcode.
+# MAGIC **What:** we look up NorthPeak 10001234 at Pine Junction, first by SKU, then by scanning its barcode.
 # MAGIC
-# MAGIC **Why:** we already have the product's ID. An exact lookup gets the product and its store inventory without ranking alternatives.
+# MAGIC **Why:** when you already have the ID, you don't want search ranking anything. One `WHERE` clause gets the product and the store's inventory together.
 # MAGIC
-# MAGIC **Look for:** both IDs return the same product. Pine Junction has zero in stock. Finding a product doesn't mean we can sell it today.
+# MAGIC **Look for:** both IDs return the same product, and Pine Junction shows zero on the shelf. Finding a product and being able to sell it today are two different things.
 
 # COMMAND ----------
 
@@ -609,16 +606,16 @@ print("✓ Exact lookup found SKU 10001234 by SKU and by barcode")
 # MAGIC %md
 # MAGIC ## 3. Set the customer's requirements
 # MAGIC
-# MAGIC **What:** we're supplying the request fields and counting how many products meet them.
+# MAGIC **What:** we fill in the request fields and count how many products survive them.
 # MAGIC
 # MAGIC ```text
 # MAGIC Must match:  impact driver, 20V, tool only, not EmberVale
 # MAGIC Rank for:    driving long screws into deck boards
 # MAGIC ```
 # MAGIC
-# MAGIC **Why:** voltage and brand exclusion are requirements. The description helps rank the products that meet those requirements. An application would need to extract and validate these fields; we've filled them in here.
+# MAGIC **Why:** voltage, kit, and "not EmberVale" are hard rules; a result that breaks one of them is wrong, no matter how well it ranks. The description is what search ranks on. In a real app something has to extract and validate these fields from the sentence; here we typed them in.
 # MAGIC
-# MAGIC **Look for:** 24 products become 4. The kit and the excluded brand are removed before we compare search results.
+# MAGIC **Look for:** the funnel: 24 products down to 4. The kit and the excluded brand are gone before we compare any search results.
 
 # COMMAND ----------
 
@@ -674,9 +671,9 @@ print(f"\n→ Only these {funnel['by_brand']} can be the answer, at any store. N
 # MAGIC ## 4. Compare vector and keyword results
 # MAGIC ### Load the search query
 # MAGIC
-# MAGIC **What:** we're saving the SQL query and a function to call it. The next cell runs it.
+# MAGIC **What:** this saves the one SQL query the rest of the lab runs, plus a small function to call it. The next cell runs it.
 # MAGIC
-# MAGIC **Why:** we want to compare two rankings over the same eligible products. Vector search compares the example vectors. Keyword search (BM25) scores word matches. We combine their ranks to produce one list.
+# MAGIC **Why:** I want you to see two rankings over the same eligible products. Vector search compares the example vectors (meaning). Keyword search (BM25) scores word matches. Then we blend the two ranks into one list.
 # MAGIC
 # MAGIC ```text
 # MAGIC Products that meet the customer and store rules
@@ -686,9 +683,9 @@ print(f"\n→ Only these {funnel['by_brand']} can be the answer, at any store. N
 # MAGIC                  Combined ranking
 # MAGIC ```
 # MAGIC
-# MAGIC **Look for:** `Search query loaded`. In the SQL, `WHERE` sets eligibility, the two ranking sections score products, and `scored` combines the ranks. We don't need to read every line aloud.
+# MAGIC **Look for:** `Search query loaded`. If you open the SQL, `WHERE` decides who's eligible, the two ranking sections score them, and `scored` blends the ranks. No need to read every line out loud.
 # MAGIC
-# MAGIC The vector example uses fixed word groups, not a trained model. These rankings help us follow the query; real search quality needs a separate test.
+# MAGIC The vector side uses fixed word groups, not a trained model. Good enough to follow how the query behaves; a real test of search quality is a separate exercise.
 
 # COMMAND ----------
 
@@ -858,11 +855,11 @@ print("✓ Search query loaded. The next cell runs it at both stores.")
 # MAGIC %md
 # MAGIC ### 4a. Search both stores
 # MAGIC
-# MAGIC **What:** we're running the same request at Pine Junction and River Bend. Products must be carried by that store and in stock.
+# MAGIC **What:** the same request at Pine Junction and River Bend. A product has to be carried by that store and on the shelf.
 # MAGIC
-# MAGIC **Why:** this gives us a starting result before we add the regular-lineup rule in step 5.
+# MAGIC **Why:** this is our baseline before we add the regular-lineup rule in step 5.
 # MAGIC
-# MAGIC **Look for:** ForgeWorks is the top result at both stores. At River Bend, the vector and keyword rankings disagree. `Final` is their combined order.
+# MAGIC **Look for:** ForgeWorks first at both stores. At River Bend the two rankings disagree on first place (vector says ForgeWorks, keyword says NorthPeak), and `Final` is the blend. And NorthPeak 10001234 doesn't show up at Pine Junction at all: zero on the shelf means it never gets ranked.
 
 # COMMAND ----------
 
@@ -900,13 +897,13 @@ print("✓ Ranked two ways and blended, and every result follows the customer's 
 # MAGIC %md
 # MAGIC ### 4b. Give keywords more weight (optional, 5 minutes)
 # MAGIC
-# MAGIC **What:** we're giving River Bend's keyword ranking a little more weight. The request, stock, and eligibility rules stay the same.
+# MAGIC **What:** at River Bend, we lean the blend toward keywords. The request, stock, and eligibility rules stay the same.
 # MAGIC
-# MAGIC **Why:** ForgeWorks ranks first by vector; NorthPeak ranks first by keyword. With equal weights they'd tie. Changing the weights lets us test which result to prefer.
+# MAGIC **Why:** ForgeWorks wins on vector, NorthPeak wins on keyword, and with equal weights they'd tie. The weights are a knob you own. Which result do you want when the two signals disagree?
 # MAGIC
-# MAGIC **Look for:** predict which product will come first, then run the cell. These are example weights. We'd choose production weights using real questions and expected results.
+# MAGIC **Look for:** predict first, then run it. These are example weights; you'd pick production weights from real questions with known right answers.
 # MAGIC
-# MAGIC You can skip this cell and continue to step 5. Later searches use the original weights.
+# MAGIC Skip this cell if we're short on time and go to step 5. Later searches use the original weights.
 
 # COMMAND ----------
 
@@ -930,9 +927,9 @@ print("✓ Changing only the blend changed the answer")
 # MAGIC %md
 # MAGIC ## 5. Recommend only the store's regular lineup
 # MAGIC
-# MAGIC **What:** for this exercise, the store asks us to recommend its regular lineup only. We turn on the `CORE` filter in both rankings.
+# MAGIC **What:** the store asks us to recommend its regular lineup only, so we turn on the `CORE` filter in both rankings.
 # MAGIC
-# MAGIC **Why:** a product can be in stock and still be outside that lineup. This is an example store policy we control, not a rule every retailer needs.
+# MAGIC **Why:** a product can be on the shelf and still be outside what the store wants to push. This is a store policy we control in SQL, not a rule every retailer needs. The point is that the store's rules shape the candidates before ranking, instead of filtering a list after the fact.
 # MAGIC
 # MAGIC | Product | Pine Junction | River Bend |
 # MAGIC |---|---|---|
@@ -941,7 +938,7 @@ print("✓ Changing only the blend changed the answer")
 # MAGIC | BlueOak 10001237 | Regular, in stock | Regular, in stock |
 # MAGIC | NorthPeak 10001238 | Regular, in stock | Extended lineup |
 # MAGIC
-# MAGIC **Look for:** which products are still eligible at each store? Pine Junction drops ForgeWorks even though it has stock. Compare the results with step 4a; the ranking weights are the same.
+# MAGIC **Look for:** predict which products are still eligible at each store, then run it. Pine Junction drops ForgeWorks even though it has eight on the shelf. Compare with 4a: same question, same weights, different answer per store, and the only thing that changed is one line of SQL.
 
 # COMMAND ----------
 
@@ -979,11 +976,11 @@ print("✓ Regular-lineup results: BlueOak at Pine Junction, ForgeWorks at River
 # MAGIC %md
 # MAGIC ## 6. Try a request nothing can satisfy
 # MAGIC
-# MAGIC **What:** we're excluding all four brands that have a matching driver.
+# MAGIC **What:** the customer rules out all four brands that make a matching driver.
 # MAGIC
-# MAGIC **Why:** the query should respect the customer's requirements even when that leaves nothing to recommend. The app can ask whether they'd consider another brand.
+# MAGIC **Why:** the query should respect the customer's rules even when that leaves nothing. The app can then ask "would you consider another brand?" instead of quietly recommending something they said no to.
 # MAGIC
-# MAGIC **Look for:** zero results. We haven't silently removed a requirement to fill the list.
+# MAGIC **Look for:** zero rows, on purpose. We didn't drop a rule to fill the list.
 
 # COMMAND ----------
 
@@ -1007,11 +1004,11 @@ print("✓ Nothing fit the customer's rules, and the query returned nothing")
 # MAGIC %md
 # MAGIC ## 7. Restock a product and search again
 # MAGIC
-# MAGIC **What:** we're changing Pine Junction's NorthPeak 10001234 stock from 0 to 5, then repeating the search. The cell resets stock to 0 afterward.
+# MAGIC **What:** a delivery shows up: Pine Junction's NorthPeak 10001234 goes from 0 to 5 on the shelf. We run the same search, then set the shelf back to 0.
 # MAGIC
-# MAGIC **Why:** the product was excluded because it was out of stock. We want to see what happens when it becomes available. The request, product descriptions, and search vectors stay the same.
+# MAGIC **Why:** that product was out of the running only because it was out of stock. Nothing about the request, the descriptions, or the vectors changes. One inventory row does.
 # MAGIC
-# MAGIC **Look for:** predict the new top result. After the reset, BlueOak should be first again.
+# MAGIC **Look for:** predict the new top result at Pine Junction, then run it. After the reset, BlueOak should be first again.
 
 # COMMAND ----------
 
@@ -1053,11 +1050,11 @@ print("✓ Put the shelf back to 0, so Pine Junction's answer is BlueOak 1000123
 # MAGIC %md
 # MAGIC ### Check the exercise results
 # MAGIC
-# MAGIC **What:** we're checking the results from the exercises we ran.
+# MAGIC **What:** a quick check that the exercises produced the answers this lab expects.
 # MAGIC
-# MAGIC **Why:** this confirms the examples matched our expectations. It doesn't grade production search quality.
+# MAGIC **Why:** so we know the examples behaved, before we talk about what they mean. It grades the lab, not your search quality.
 # MAGIC
-# MAGIC **Look for:** 8 checks if you ran step 4b, or 7 with that optional step skipped.
+# MAGIC **Look for:** 8 checks if you ran step 4b, 7 if you skipped it.
 
 # COMMAND ----------
 
@@ -1084,22 +1081,22 @@ else:
 # MAGIC %md
 # MAGIC ## 8. Would this help your application?
 # MAGIC
-# MAGIC We looked up an exact product, searched for alternatives, applied store rules, and repeated the search after a restock.
+# MAGIC We looked up an exact product, searched for alternatives, let the store's rules shape the candidates, and watched one shelf count change the answer.
 # MAGIC
-# MAGIC Where would this fit how you search today? Which store rules would you keep or change?
+# MAGIC So, where would this fit how you search today? Which store rules would you keep, and which would you change?
 # MAGIC
-# MAGIC If there's a useful case, the next step is a small test with 20 to 30 real questions and the expected results at each store. We'd need real embeddings and a way to extract the request fields. Today's examples don't establish search quality or performance.
+# MAGIC If there's a case worth pursuing, the next step is small: 20 to 30 real questions with the expected answer at each store, real embeddings, and a way to extract the request fields. Until then, nothing here establishes search quality or performance, and I'd rather say that now than have you find out later.
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Report the advance-setup result
 # MAGIC
-# MAGIC **What:** when the session setup notebook runs this lab, we're checking that all eight exercises passed and the inventory is back at its starting state.
+# MAGIC **What:** when START_HERE runs this lab ahead of time, this cell confirms all eight exercises passed and the inventory is back to its starting state, and reports that back.
 # MAGIC
-# MAGIC **Why:** the setup report needs to confirm that the full lab ran and left your project ready to use again.
+# MAGIC **Why:** the READY report needs proof that the whole lab ran and left your project ready to run again.
 # MAGIC
-# MAGIC **Look for:** a preparation result during advance setup. In the room, this cell says the report is skipped and leaves your work in place.
+# MAGIC **Look for:** a preparation result in an advance run. In the room, this cell says the report is skipped and leaves your work alone.
 
 # COMMAND ----------
 
@@ -1140,6 +1137,6 @@ else:
 # MAGIC %md
 # MAGIC ## When you're finished
 # MAGIC
-# MAGIC Rerunning the table-build cell resets this lab's two tables. The restock cell resets its own stock change.
+# MAGIC Rerunning the table-build cell resets this lab's two tables. The restock cell resets its own change.
 # MAGIC
-# MAGIC To remove the project, open Lakebase and check the project name printed during setup. Confirm it belongs to you and has the `retail-search-context` lab tag, then delete it when you no longer need your work. Closing the notebook doesn't delete the project.
+# MAGIC Closing the notebook doesn't delete the project. When you're done with it, open Lakebase, find the project name printed during setup, confirm it's yours and carries the `retail-search-context` lab tag, and delete it.
