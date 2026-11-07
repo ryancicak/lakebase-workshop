@@ -119,11 +119,12 @@ run("""
         owner   TEXT DEFAULT CURRENT_USER
     );
 """, show=False)
+# These companies and contacts are fictional examples.
 run("""
     INSERT INTO api_clients (name, email, company) VALUES
-      ('Acme Corp',        'contact@acme.com',          'Acme Corporation'),
-      ('TechStart Inc',    'hello@techstart.com',       'TechStart Inc'),
-      ('Global Solutions', 'info@globalsolutions.com',  'Global Solutions Ltd');
+      ('Acme Corp',        'acme@example.com',          'Acme Corporation'),
+      ('TechStart Inc',    'techstart@example.com',       'TechStart Inc'),
+      ('Global Solutions', 'globalsolutions@example.com',  'Global Solutions Ltd');
 """, show=False)
 run("SELECT id, name, email, company FROM api_clients ORDER BY id;", label="api_clients")
 
