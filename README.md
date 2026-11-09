@@ -1,24 +1,24 @@
 # Lakebase labs: start here
 
-Prepare the **branching** and **retail Search** labs before the customer-driven session. Run one notebook, check the result, and keep the two lab links for the day.
+Prepare the **branching** and **retail Search** labs before the customer-driven session. Add this repository to your Databricks workspace, run one notebook, check the result, and keep the two lab links for the day.
 
 Each hands-on person runs it as themselves in the workspace we'll use together.
 
 ## Run START_HERE
 
-1. In Databricks, open **Workspace**, go to your home folder, and choose **Import**.
-2. Choose **URL**, paste the link below, and click **Import**.
+1. In Databricks, open **Workspace**, go to your home folder, and choose **Create > Git folder**.
+2. Paste the repository URL below and click **Create**. The repository is public, so no Git credential is needed.
 
    ```text
-   https://raw.githubusercontent.com/ryancicak/lakebase-workshop/main/START_HERE.py
+   https://github.com/ryancicak/lakebase-workshop.git
    ```
 
-3. Open **START_HERE**. Choose **Serverless**, select **Standard environment version 6**, and click **Run all**.
-4. Wait for **READY**. Send your Databricks contact the final report, and keep both notebook links for the session. If a check fails, send the error and job link.
+3. Open **START_HERE** at the top of the new folder. Choose **Serverless**, select **Standard environment version 6**, and click **Run all**.
+4. Wait for **READY**. Send your Databricks contact the final report (the line that starts with "Copy back"), and keep both notebook links for the session. If a check fails, send the error and job link.
 
 [View the START_HERE notebook](START_HERE.py) · [Download the notebook](https://raw.githubusercontent.com/ryancicak/lakebase-workshop/main/START_HERE.py)
 
-If you've already added this repository as a Databricks Git folder, open **START_HERE** at the top of the default `main` branch and start at step 3.
+If Git folders aren't available in your workspace, choose **Import > URL** on your home folder instead, paste `https://raw.githubusercontent.com/ryancicak/lakebase-workshop/main/START_HERE.py`, and start at step 3.
 
 ## What it checks
 
